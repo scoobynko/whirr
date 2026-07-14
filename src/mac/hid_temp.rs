@@ -1,5 +1,7 @@
 use core_foundation::array::{CFArray, CFArrayRef};
-use core_foundation::base::{kCFAllocatorDefault, CFAllocatorRef, CFRelease, CFTypeRef, TCFType};
+use core_foundation::base::{
+    kCFAllocatorDefault, CFAllocatorRef, CFGetTypeID, CFRelease, CFTypeRef, TCFType,
+};
 use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
 use core_foundation::number::CFNumber;
 use core_foundation::string::{CFString, CFStringRef};
@@ -34,10 +36,18 @@ extern "C" {
     fn IOHIDEventGetFloatValue(event: IOHIDEventRef, field: i32) -> f64;
 }
 
+// Teardown policy: `TempSensor` is a process-lifetime singleton (Task 9 holds
+// it in the medium sampler for the whole run). The `client` handle is a
+// Create-rule object intentionally leaked at process exit — a bounded,
+// one-time leak the OS reclaims. We deliberately do NOT implement Drop:
+// IOHIDEventSystemClient is a private API and releasing it buys nothing at
+// exit while a wrong release would be worse than the bounded leak.
 pub struct TempSensor {
     client: IOHIDEventSystemClientRef,
 }
 
+// The client is only touched from the medium sampler thread; opaque handle,
+// no shared mutation.
 unsafe impl Send for TempSensor {}
 
 impl TempSensor {
@@ -78,6 +88,11 @@ impl TempSensor {
                 let name_ref =
                     IOHIDServiceClientCopyProperty(svc, product_key.as_concrete_TypeRef());
                 if name_ref.is_null() {
+                    continue;
+                }
+                if CFGetTypeID(name_ref) != CFString::type_id() {
+                    // Not a CFString; release the Create-rule ref and skip.
+                    CFRelease(name_ref);
                     continue;
                 }
                 let name = CFString::wrap_under_create_rule(name_ref as _).to_string();
