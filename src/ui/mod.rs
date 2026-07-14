@@ -4,6 +4,7 @@
 pub mod font;
 pub mod cpu;
 pub mod header;
+pub mod memory;
 pub mod power;
 pub mod temp;
 #[allow(dead_code)]
@@ -28,5 +29,5 @@ pub fn draw(f: &mut Frame, app: &App) {
     cpu::render(f, gauges[0], app);
     temp::render(f, gauges[1], app);
     power::render(f, gauges[2], app);
-    // memory panel fills gauges[3] as Task 17 lands
+    memory::render(f, gauges[3], app);
 }
