@@ -7,7 +7,6 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
 
 #[allow(dead_code)]
 mod units;
@@ -18,7 +17,6 @@ mod history;
 #[allow(dead_code)]
 mod mac;
 
-#[allow(dead_code)]
 mod ui;
 
 mod sampler;
@@ -109,23 +107,9 @@ fn main() -> io::Result<()> {
             break;
         }
         if app.dirty {
-            terminal.draw(|f| ui_placeholder(f, &app))?; // replaced by ui::draw in Task 13+
+            terminal.draw(|f| ui::draw(f, &app))?;
             app.dirty = false;
         }
     }
     Ok(())
-}
-
-fn ui_placeholder(f: &mut Frame, app: &App) {
-    let cpu = app.fast.as_ref().map_or(0.0, |s| s.total_cpu);
-    let temp = app
-        .medium
-        .as_ref()
-        .and_then(|m| m.temp_c)
-        .map_or_else(|| "--".to_string(), |t| format!("{t:.1}"));
-    let text = format!(
-        "{}\ncpu {cpu:.0}%   temp {temp}C\n(ui::draw arrives in Task 13)",
-        app.statics.chip
-    );
-    f.render_widget(Paragraph::new(text), f.area());
 }
