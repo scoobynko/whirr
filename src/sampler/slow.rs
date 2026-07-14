@@ -42,6 +42,20 @@ pub fn run(tx: Sender<Snapshot>) {
                 last_good = parse_lsof(&String::from_utf8_lossy(&out.stdout));
                 SlowSnap { ports: last_good.clone(), stale: false }
             }
+            // lsof exits with status 1 and empty stdout when nothing matches
+            // the filter (e.g. no listening TCP sockets right now) — that is
+            // a genuinely empty result, not a failure, so it must not fall
+            // into the stale arm below (which would otherwise report "stale"
+            // forever on a box with zero listeners). Only treat it as an
+            // error if stderr has something to say.
+            Ok(out)
+                if out.status.code() == Some(1)
+                    && out.stdout.is_empty()
+                    && out.stderr.is_empty() =>
+            {
+                last_good = Vec::new();
+                SlowSnap { ports: Vec::new(), stale: false }
+            }
             _ => SlowSnap { ports: last_good.clone(), stale: true },
         };
         if tx.send(Snapshot::Slow(snap)).is_err() {
@@ -51,6 +65,10 @@ pub fn run(tx: Sender<Snapshot>) {
     }
 }
 
+// These tests cover `parse_lsof` only. `run()`'s exit-status/staleness
+// handling (see the match above — status 1 + empty stdout/stderr is a valid
+// empty result, not staleness) isn't unit-tested here because it shells out
+// to the real `lsof` binary; it's exercised manually / via the app.
 #[cfg(test)]
 mod tests {
     use super::parse_lsof;
