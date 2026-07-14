@@ -63,6 +63,10 @@ something actually changed. The process table is scanned with raw `libproc`
 calls (one `proc_pidinfo` per pid, names cached) — ~1 ms per pass instead of
 the ~35 ms a full `sysinfo` process refresh costs.
 
+Note: the budget is measured on an interactive terminal at normal QoS;
+sandboxed/background-QoS runs report inflated CPU (~5×) because the whole
+process is scheduled on efficiency cores at idle clocks.
+
 ## License
 
 MIT, see [LICENSE](LICENSE).
