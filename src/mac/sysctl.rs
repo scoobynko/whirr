@@ -17,7 +17,7 @@ pub fn sysctl_raw(name: &str, buf: &mut [u8]) -> Option<usize> {
 
 pub fn sysctl_string(name: &str) -> Option<String> {
     let mut buf = [0u8; 256];
-    let len = sysctl_raw(name, &mut buf)?;
+    let len = sysctl_raw(name, &mut buf)?.min(buf.len());
     let end = buf[..len].iter().position(|&b| b == 0).unwrap_or(len);
     String::from_utf8(buf[..end].to_vec()).ok()
 }
