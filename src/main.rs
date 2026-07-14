@@ -34,6 +34,17 @@ fn restore_terminal() {
 }
 
 fn main() -> io::Result<()> {
+    // Temporary verification hook for Task 7 (removed in Task 8 once
+    // --list-sensors supersedes it). Must run before terminal setup so it
+    // works without a TTY.
+    if std::env::args().any(|a| a == "--power-test") {
+        let mut p = crate::mac::ioreport::PowerSampler::new().expect("ioreport");
+        p.sample();
+        std::thread::sleep(std::time::Duration::from_secs(2));
+        println!("{:?}", p.sample().map(|s| (s.cpu_w, s.gpu_w, s.ane_w)));
+        return Ok(());
+    }
+
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         restore_terminal();
