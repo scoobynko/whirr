@@ -34,14 +34,24 @@ fn restore_terminal() {
 }
 
 fn main() -> io::Result<()> {
-    // Temporary verification hook for Task 7 (removed in Task 8 once
-    // --list-sensors supersedes it). Must run before terminal setup so it
-    // works without a TTY.
-    if std::env::args().any(|a| a == "--power-test") {
-        let mut p = crate::mac::ioreport::PowerSampler::new().expect("ioreport");
-        p.sample();
-        std::thread::sleep(std::time::Duration::from_secs(2));
-        println!("{:?}", p.sample().map(|s| (s.cpu_w, s.gpu_w, s.ane_w)));
+    // Diagnostic hook: dump HID temperature sensors and IOReport Energy
+    // Model channels. Must run before terminal setup so it works without a
+    // TTY.
+    if std::env::args().any(|a| a == "--list-sensors") {
+        match mac::hid_temp::TempSensor::new() {
+            Some(t) => {
+                for (name, v) in t.list() {
+                    println!("{name:32} {v:6.1} °C");
+                }
+            }
+            None => println!("no HID temperature client"),
+        }
+        if let Some(p) = mac::ioreport::PowerSampler::new() {
+            println!("--- IOReport Energy Model channels ---");
+            for name in p.channel_names() {
+                println!("{name}");
+            }
+        }
         return Ok(());
     }
 
