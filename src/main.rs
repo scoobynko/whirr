@@ -15,6 +15,9 @@ mod units;
 #[allow(dead_code)]
 mod history;
 
+#[allow(dead_code)]
+mod mac;
+
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
