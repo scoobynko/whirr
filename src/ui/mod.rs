@@ -1,6 +1,3 @@
-// font::big_text and some of theme:: are consumed by panels arriving in
-// Tasks 15-20; header/cpu/draw are wired in now, so only those stay allowed.
-#[allow(dead_code)]
 pub mod font;
 pub mod cpu;
 pub mod header;
@@ -10,7 +7,6 @@ pub mod ports;
 pub mod power;
 pub mod processes;
 pub mod temp;
-#[allow(dead_code)]
 pub mod theme;
 
 use ratatui::prelude::*;

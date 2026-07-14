@@ -28,14 +28,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     for (i, p) in slow.ports.iter().enumerate() {
         let selected = focused && i == app.selected;
         let style = if selected {
-            Style::default().fg(theme::BG_CELL).bg(theme::ACCENT).bold()
+            Style::default().fg(theme::BG_CELL).bg(theme::ACCENT)
         } else {
             Style::default().fg(theme::ACCENT)
         };
         spans.push(Span::styled(format!(":{}", p.port), style.bold()));
         spans.push(Span::styled(
             format!(" {} ", p.process),
-            if selected { style } else { Style::default().fg(theme::TEXT) },
+            if selected { style.bold() } else { Style::default().fg(theme::TEXT) },
         ));
         if i < slow.ports.len() - 1 {
             spans.push(Span::styled("· ", Style::default().fg(theme::DIM)));

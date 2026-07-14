@@ -81,7 +81,6 @@ impl App {
             net_rx_total: 500_000_000,
             net_tx_total: 120_000_000,
             load_avg: 2.35,
-            mem_used: 8_000_000_000,
             mem_total: 16_000_000_000,
         }));
         app.ingest(Snapshot::Medium(MediumSnap {
@@ -161,6 +160,16 @@ impl App {
         self.dirty = true;
         self.message = None;
 
+        let ctrl_c =
+            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
+        // Ctrl-C must quit unconditionally, even while a kill confirmation is
+        // pending — otherwise it's swallowed as a "cancel" below and the app
+        // never exits on Ctrl-C during that prompt.
+        if ctrl_c {
+            self.should_quit = true;
+            return;
+        }
+
         if let Some((pid, name)) = self.pending_kill.clone() {
             match key.code {
                 KeyCode::Char('y') => {
@@ -175,10 +184,7 @@ impl App {
             return;
         }
 
-        let ctrl_c =
-            key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
         match key.code {
-            _ if ctrl_c => self.should_quit = true,
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Tab => {
                 self.focus = match self.focus {
@@ -240,7 +246,7 @@ mod tests {
                 ProcInfo { pid: 2, name: "ram".into(), cpu: 10.0, mem: 900 },
             ],
             net_rx_rate: 0.0, net_tx_rate: 0.0, net_rx_total: 0, net_tx_total: 0,
-            load_avg: 1.0, mem_used: 0, mem_total: 1,
+            load_avg: 1.0, mem_total: 1,
         }));
         a
     }
@@ -262,6 +268,16 @@ mod tests {
         a.on_key(KeyEvent::from(KeyCode::Down));
         a.on_key(KeyEvent::from(KeyCode::Down));
         assert_eq!(a.selected, 1); // only 2 processes
+    }
+
+    #[test]
+    fn ctrl_c_quits_even_during_pending_kill() {
+        let mut a = app_with_procs();
+        a.on_key(key('k'));
+        assert!(a.pending_kill.is_some());
+        let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
+        a.on_key(ctrl_c);
+        assert!(a.should_quit, "Ctrl-C must quit, not just cancel the kill prompt");
     }
 
     #[test]

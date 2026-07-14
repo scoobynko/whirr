@@ -140,7 +140,11 @@ impl PowerSampler {
                     let mut snap = PowerSnap { cpu_w: 0.0, gpu_w: 0.0, ane_w: 0.0 };
                     if !delta.is_null() {
                         Self::for_each_channel(delta, |item| {
-                            let name = cfstr_to_string(IOReportChannelGetChannelName(item));
+                            // Trim to match `unit_to_joules`, which already
+                            // trims the unit label — keep both sides of the
+                            // match symmetric in case IOReport pads either.
+                            let name =
+                                cfstr_to_string(IOReportChannelGetChannelName(item)).trim().to_string();
                             let unit = cfstr_to_string(IOReportChannelGetUnitLabel(item));
                             let joules = IOReportSimpleGetIntegerValue(item, 0) as f64
                                 * unit_to_joules(&unit);
