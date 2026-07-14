@@ -1,7 +1,9 @@
 use std::sync::mpsc::Sender;
 use std::time::{Duration, Instant};
 
-use sysinfo::{Networks, ProcessRefreshKind, ProcessesToUpdate, System};
+use sysinfo::{Networks, System};
+
+use crate::mac::proc::ProcScanner;
 
 use super::{FastSnap, ProcInfo, Snapshot};
 
@@ -10,16 +12,15 @@ const TICK: Duration = Duration::from_secs(2);
 pub fn run(tx: Sender<Snapshot>) {
     let mut sys = System::new();
     let mut networks = Networks::new_with_refreshed_list();
+    // Direct libproc scan instead of sysinfo's process refresh: ~1 ms of CPU
+    // per pass instead of ~35 ms, which is the difference between blowing the
+    // < 0.5% CPU budget and fitting comfortably inside it (see mac::proc).
+    let mut scanner = ProcScanner::new();
     let mut prev_totals: Option<(u64, u64, Instant)> = None;
 
     loop {
         sys.refresh_cpu_usage();
         sys.refresh_memory();
-        sys.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::nothing().with_cpu().with_memory(),
-        );
         networks.refresh(true);
 
         let (rx_total, tx_total) = networks.iter().fold((0u64, 0u64), |acc, (_, d)| {
@@ -45,16 +46,7 @@ pub fn run(tx: Sender<Snapshot>) {
             per_core.iter().sum::<f32>() / per_core.len() as f32
         };
 
-        let mut processes: Vec<ProcInfo> = sys
-            .processes()
-            .values()
-            .map(|p| ProcInfo {
-                pid: p.pid().as_u32() as i32,
-                name: p.name().to_string_lossy().into_owned(),
-                cpu: p.cpu_usage(),
-                mem: p.memory(),
-            })
-            .collect();
+        let mut processes: Vec<ProcInfo> = scanner.scan();
         processes.sort_by(|a, b| b.cpu.total_cmp(&a.cpu));
         processes.truncate(50);
 
