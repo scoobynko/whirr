@@ -28,6 +28,9 @@ fn get_i64(d: &CFDictionary<CFString, CFType>, key: &str) -> Option<i64> {
 pub fn read() -> Option<BatterySnap> {
     unsafe {
         let matching = IOServiceMatching(c"AppleSmartBattery".as_ptr());
+        if matching.is_null() {
+            return None;
+        }
         let service = IOServiceGetMatchingService(0, matching); // 0 = kIOMainPortDefault
         if service == 0 {
             return None;
@@ -41,7 +44,7 @@ pub fn read() -> Option<BatterySnap> {
         let dict: CFDictionary<CFString, CFType> =
             CFDictionary::wrap_under_create_rule(props as _);
 
-        let percent = get_i64(&dict, "CurrentCapacity")? as u8; // % on Apple Silicon
+        let percent = get_i64(&dict, "CurrentCapacity")?.clamp(0, 100) as u8; // % on Apple Silicon
         let cycles = get_i64(&dict, "CycleCount").unwrap_or(0) as u32;
         let charging = dict
             .find(CFString::new("IsCharging"))
