@@ -18,6 +18,9 @@ mod history;
 #[allow(dead_code)]
 mod mac;
 
+#[allow(dead_code)]
+mod ui;
+
 mod sampler;
 
 mod app;
