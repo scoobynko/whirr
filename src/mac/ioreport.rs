@@ -44,6 +44,13 @@ extern "C" {
     fn IOReportSimpleGetIntegerValue(item: CFDictionaryRef, index: i32) -> i64;
 }
 
+// Teardown policy: `PowerSampler` is a process-lifetime singleton. `channels`,
+// `subscription`, and the final `prev` sample are intentionally leaked at
+// process exit — a bounded, one-time leak the OS reclaims. We deliberately do
+// NOT implement Drop with a CFRelease of `subscription`: IOReport is a private
+// framework and the subscription's CF-ness is undocumented, so a wrong release
+// would be worse than the bounded leak. (Per-sample dictionaries created during
+// steady-state operation ARE released exactly once each; see `sample()`.)
 pub struct PowerSampler {
     subscription: IOReportSubscriptionRef,
     channels: CFMutableDictionaryRef,
@@ -93,6 +100,11 @@ impl PowerSampler {
             );
             if subscription.is_null() {
                 return None;
+            }
+            // The out-param dictionary is a caller-owned copy we never use;
+            // release it immediately to avoid a leak.
+            if !subscribed.is_null() {
+                CFRelease(subscribed as CFTypeRef);
             }
             Some(Self { subscription, channels, prev: None })
         }
