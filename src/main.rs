@@ -12,6 +12,9 @@ use ratatui::widgets::Paragraph;
 #[allow(dead_code)]
 mod units;
 
+#[allow(dead_code)]
+mod history;
+
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
