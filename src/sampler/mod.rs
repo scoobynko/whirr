@@ -12,11 +12,12 @@ pub enum Snapshot {
     Slow(SlowSnap),
 }
 
-// Some fields below are not yet read by main.rs — only `total_cpu` drives the
-// placeholder UI this task. Later panel tasks (CPU/network/processes) will
-// consume the rest; the `#[allow(dead_code)]` keeps clippy quiet until then
-// without altering the field names/types defined by the task contract.
-#[allow(dead_code)]
+// Some fields below are not yet read by main.rs — App (Task 11) reads
+// FastSnap.total_cpu/processes and MediumSnap.temp_c/power; the rest await
+// later panel tasks (memory/network/ports). The `#[allow(dead_code)]` keeps
+// clippy quiet until then without altering the field names/types defined by
+// the task contract. All ProcInfo fields are now consumed by app.rs, so its
+// allow was removed.
 pub struct ProcInfo {
     pub pid: i32,
     pub name: String,

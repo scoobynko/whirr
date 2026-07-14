@@ -1,7 +1,7 @@
 use std::io;
 use std::time::Duration;
 
-use crossterm::event::{self, Event, KeyCode, KeyModifiers};
+use crossterm::event::{self, Event};
 use crossterm::execute;
 use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
@@ -19,6 +19,10 @@ mod history;
 mod mac;
 
 mod sampler;
+
+mod app;
+
+use app::App;
 
 struct TerminalGuard;
 
@@ -68,27 +72,57 @@ fn main() -> io::Result<()> {
 
     let (tx, rx) = std::sync::mpsc::channel();
     sampler::spawn_samplers(tx);
-    let mut latest_cpu: f32 = 0.0;
+
+    let no_fan = std::env::args().any(|a| a == "--no-fan");
+    let mut app = App::new(no_fan);
+    let mut last_fan = std::time::Instant::now();
 
     loop {
-        while let Ok(snap) = rx.try_recv() {
-            if let sampler::Snapshot::Fast(f) = snap {
-                latest_cpu = f.total_cpu;
+        let timeout = if app.no_fan {
+            Duration::from_millis(250)
+        } else {
+            app.fan_interval()
+                .checked_sub(last_fan.elapsed())
+                .unwrap_or(Duration::ZERO)
+                .max(Duration::from_millis(30))
+        };
+        if event::poll(timeout)? {
+            match event::read()? {
+                Event::Key(key) if key.kind != crossterm::event::KeyEventKind::Release => {
+                    app.on_key(key)
+                }
+                Event::Resize(_, _) => app.dirty = true,
+                _ => {}
             }
         }
-
-        terminal.draw(|f| {
-            f.render_widget(Paragraph::new(format!("cpu {latest_cpu:.0}%")), f.area());
-        })?;
-        if event::poll(Duration::from_millis(250))? {
-            if let Event::Key(key) = event::read()? {
-                let ctrl_c =
-                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
-                if key.code == KeyCode::Char('q') || ctrl_c {
-                    break;
-                }
-            }
+        while let Ok(snap) = rx.try_recv() {
+            app.ingest(snap);
+        }
+        if !app.no_fan && last_fan.elapsed() >= app.fan_interval() {
+            app.tick_fan();
+            last_fan = std::time::Instant::now();
+        }
+        if app.should_quit {
+            break;
+        }
+        if app.dirty {
+            terminal.draw(|f| ui_placeholder(f, &app))?; // replaced by ui::draw in Task 13+
+            app.dirty = false;
         }
     }
     Ok(())
+}
+
+fn ui_placeholder(f: &mut Frame, app: &App) {
+    let cpu = app.fast.as_ref().map_or(0.0, |s| s.total_cpu);
+    let temp = app
+        .medium
+        .as_ref()
+        .and_then(|m| m.temp_c)
+        .map_or_else(|| "--".to_string(), |t| format!("{t:.1}"));
+    let text = format!(
+        "{}\ncpu {cpu:.0}%   temp {temp}C\n(ui::draw arrives in Task 13)",
+        app.statics.chip
+    );
+    f.render_widget(Paragraph::new(text), f.area());
 }
