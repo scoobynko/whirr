@@ -1,6 +1,6 @@
 use ratatui::prelude::*;
 use ratatui::symbols::Marker;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
+use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph, Wrap};
 
 use super::theme;
 use crate::app::App;
@@ -33,7 +33,13 @@ fn render_heatmap(f: &mut Frame, area: Rect, app: &App, per_core: &[f32]) {
         ));
         spans.push(Span::raw(" "));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)), area);
+    // On machines with many cores (e.g. M5 P-cores) the cell spans overflow a
+    // single line's width; wrap onto the 3-row area allotted to the heatmap
+    // instead of silently truncating the trailing cores off the panel edge.
+    f.render_widget(
+        Paragraph::new(Line::from(spans)).wrap(Wrap { trim: false }),
+        area,
+    );
 }
 
 fn render_history(f: &mut Frame, area: Rect, app: &App, current: f32) {
