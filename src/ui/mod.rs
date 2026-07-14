@@ -4,6 +4,7 @@
 pub mod font;
 pub mod cpu;
 pub mod header;
+pub mod power;
 pub mod temp;
 #[allow(dead_code)]
 pub mod theme;
@@ -26,5 +27,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     let gauges = Layout::horizontal([Constraint::Ratio(1, 4); 4]).split(rows[1]);
     cpu::render(f, gauges[0], app);
     temp::render(f, gauges[1], app);
-    // power/memory panels fill gauges[2..4] as Tasks 16–17 land
+    power::render(f, gauges[2], app);
+    // memory panel fills gauges[3] as Task 17 lands
 }
