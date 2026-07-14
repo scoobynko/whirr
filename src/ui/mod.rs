@@ -5,6 +5,7 @@ pub mod font;
 pub mod cpu;
 pub mod header;
 pub mod memory;
+pub mod network;
 pub mod power;
 pub mod temp;
 #[allow(dead_code)]
@@ -30,4 +31,6 @@ pub fn draw(f: &mut Frame, app: &App) {
     temp::render(f, gauges[1], app);
     power::render(f, gauges[2], app);
     memory::render(f, gauges[3], app);
+    let mid = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)]).split(rows[2]);
+    network::render(f, mid[1], app);
 }
