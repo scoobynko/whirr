@@ -1,5 +1,6 @@
 mod fast;
 mod medium;
+mod slow;
 
 use std::sync::mpsc::Sender;
 
@@ -81,6 +82,7 @@ pub struct MediumSnap {
 }
 
 #[allow(dead_code)]
+#[derive(Clone)]
 pub struct PortInfo {
     pub port: u16,
     pub process: String,
@@ -99,4 +101,7 @@ pub fn spawn_samplers(tx: Sender<Snapshot>) {
 
     let tx_medium = tx.clone();
     std::thread::spawn(move || medium::run(tx_medium));
+
+    let tx_slow = tx.clone();
+    std::thread::spawn(move || slow::run(tx_slow));
 }
