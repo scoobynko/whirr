@@ -1,4 +1,5 @@
 mod fast;
+mod medium;
 
 use std::sync::mpsc::Sender;
 
@@ -95,5 +96,7 @@ pub struct SlowSnap {
 pub fn spawn_samplers(tx: Sender<Snapshot>) {
     let tx_fast = tx.clone();
     std::thread::spawn(move || fast::run(tx_fast));
-    // medium and slow samplers are spawned here in later tasks
+
+    let tx_medium = tx.clone();
+    std::thread::spawn(move || medium::run(tx_medium));
 }
