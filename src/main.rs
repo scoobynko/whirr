@@ -18,6 +18,8 @@ mod history;
 #[allow(dead_code)]
 mod mac;
 
+mod sampler;
+
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
@@ -43,14 +45,24 @@ fn main() -> io::Result<()> {
     let _guard = TerminalGuard;
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
+    let (tx, rx) = std::sync::mpsc::channel();
+    sampler::spawn_samplers(tx);
+    let mut latest_cpu: f32 = 0.0;
+
     loop {
+        while let Ok(snap) = rx.try_recv() {
+            if let sampler::Snapshot::Fast(f) = snap {
+                latest_cpu = f.total_cpu;
+            }
+        }
+
         terminal.draw(|f| {
-            f.render_widget(Paragraph::new("whirr — coming to life"), f.area());
+            f.render_widget(Paragraph::new(format!("cpu {latest_cpu:.0}%")), f.area());
         })?;
         if event::poll(Duration::from_millis(250))? {
             if let Event::Key(key) = event::read()? {
-                let ctrl_c = key.code == KeyCode::Char('c')
-                    && key.modifiers.contains(KeyModifiers::CONTROL);
+                let ctrl_c =
+                    key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
                 if key.code == KeyCode::Char('q') || ctrl_c {
                     break;
                 }
