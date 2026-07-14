@@ -9,6 +9,9 @@ use crossterm::terminal::{
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
+#[allow(dead_code)]
+mod units;
+
 struct TerminalGuard;
 
 impl Drop for TerminalGuard {
