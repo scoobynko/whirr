@@ -6,6 +6,7 @@ pub mod cpu;
 pub mod header;
 pub mod memory;
 pub mod network;
+pub mod ports;
 pub mod power;
 pub mod processes;
 pub mod temp;
@@ -35,4 +36,5 @@ pub fn draw(f: &mut Frame, app: &App) {
     let mid = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)]).split(rows[2]);
     processes::render(f, mid[0], app);
     network::render(f, mid[1], app);
+    ports::render(f, rows[3], app);
 }
