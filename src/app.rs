@@ -4,7 +4,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
-use crate::sampler::{FastSnap, MediumSnap, ProcInfo, SlowSnap, Snapshot};
+use crate::sampler::{
+    BatterySnap, FastSnap, MemDetail, MediumSnap, PortInfo, PowerSnap, PressureLevel, ProcInfo,
+    SlowSnap, Snapshot,
+};
 
 pub enum Focus {
     Processes,
@@ -57,6 +60,54 @@ impl App {
             should_quit: false,
             dirty: true,
         }
+    }
+
+    /// A pre-populated `App` for render tests and manual UI inspection: one
+    /// `FastSnap` (a few processes, per-core loads), one `MediumSnap` (all
+    /// `Some`, temp at 88.0 to exercise the amber threshold), and one
+    /// `SlowSnap` (a few ports, not stale).
+    pub fn demo() -> Self {
+        let mut app = Self::new(false);
+        app.ingest(Snapshot::Fast(FastSnap {
+            per_core: vec![12.0, 45.0, 78.0, 30.0],
+            total_cpu: 41.0,
+            processes: vec![
+                ProcInfo { pid: 101, name: "kernel_task".into(), cpu: 12.5, mem: 512_000 },
+                ProcInfo { pid: 202, name: "WindowServer".into(), cpu: 8.3, mem: 256_000 },
+                ProcInfo { pid: 303, name: "whirr".into(), cpu: 2.1, mem: 32_000 },
+            ],
+            net_rx_rate: 1_200_000.0,
+            net_tx_rate: 300_000.0,
+            net_rx_total: 500_000_000,
+            net_tx_total: 120_000_000,
+            load_avg: 2.35,
+            mem_used: 8_000_000_000,
+            mem_total: 16_000_000_000,
+        }));
+        app.ingest(Snapshot::Medium(MediumSnap {
+            temp_c: Some(88.0),
+            power: Some(PowerSnap { cpu_w: 6.4, gpu_w: 1.2, ane_w: 0.3 }),
+            battery: Some(BatterySnap { percent: 76, charging: true, cycles: 120, health_pct: Some(97) }),
+            memory: Some(MemDetail {
+                app: 4_000_000_000,
+                wired: 2_000_000_000,
+                compressed: 1_000_000_000,
+                free: 9_000_000_000,
+                swap_used: 0,
+                swap_total: 1_000_000_000,
+                pressure: PressureLevel::Normal,
+            }),
+            uptime_secs: 3_600 * 5,
+        }));
+        app.ingest(Snapshot::Slow(SlowSnap {
+            ports: vec![
+                PortInfo { port: 22, process: "sshd".into(), pid: 1 },
+                PortInfo { port: 8080, process: "whirr-dev".into(), pid: 303 },
+                PortInfo { port: 5432, process: "postgres".into(), pid: 55 },
+            ],
+            stale: false,
+        }));
+        app
     }
 
     fn sort_procs(&mut self) {

@@ -8,22 +8,8 @@ use crossterm::terminal::{
 };
 use ratatui::prelude::*;
 
-#[allow(dead_code)]
-mod units;
-
-#[allow(dead_code)]
-mod history;
-
-#[allow(dead_code)]
-mod mac;
-
-mod ui;
-
-mod sampler;
-
-mod app;
-
-use app::App;
+use whirr::app::App;
+use whirr::{mac, sampler, ui};
 
 struct TerminalGuard;
 
