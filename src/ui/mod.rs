@@ -11,13 +11,22 @@ pub mod theme;
 
 use ratatui::prelude::*;
 
-use crate::app::App;
+use crate::app::{App, MAX_VISIBLE_PROCS};
 
 /// Final responsive layout. Panels drop out in priority order as space gets
 /// tight: ports first, then network, then power, then temp — processes and
 /// CPU always survive. The gauges row splits into as many equal columns as
 /// there are visible gauge panels (cpu + temp? + power? + memory).
-/// Process table capped at 10 rows; ports card grows with available height.
+///
+/// Process table capped at `MAX_VISIBLE_PROCS` rows (+ footer + borders); the
+/// middle row is a `Max`, not a `Length`, so it only claims that much space
+/// when it's available. At heights below the point where header + gauges +
+/// full process table + ports card (`Min(4)`) all fit, the middle row shrinks
+/// gracefully (fewer visible process rows) rather than starving the other
+/// panels — ratatui's solver holds `Min` constraints firm ahead of `Length`,
+/// so an over-committed `Length` here would squeeze header/gauges/ports
+/// arbitrarily at common sizes like 80x24. Ports card grows with available
+/// height once the process table has its room.
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let show_ports = area.height >= 20;
@@ -25,9 +34,12 @@ pub fn draw(f: &mut Frame, app: &App) {
     let show_power = area.width >= 70;
     let show_temp = area.width >= 50;
 
+    // 10 process rows + 1 footer + 2 borders
+    let middle = MAX_VISIBLE_PROCS as u16 + 3;
+
     let mut rows = vec![Constraint::Length(3), Constraint::Length(10)];
     if show_ports {
-        rows.push(Constraint::Length(13));
+        rows.push(Constraint::Max(middle));
         rows.push(Constraint::Min(4));
     } else {
         rows.push(Constraint::Min(6));

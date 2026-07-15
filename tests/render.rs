@@ -34,3 +34,31 @@ fn tiny_size_collapses_to_essentials() {
     assert!(c.contains("Processes"));
     assert!(!c.contains("Ports"));
 }
+
+// Regression test for the 80x24 layout over-commit: at a stock terminal
+// size, ports must stay visible (Min(4) floor) while the process table
+// shrinks gracefully (Max(13) middle row) instead of the solver squeezing
+// header/gauges arbitrarily to satisfy an over-committed Length(13).
+#[test]
+fn stock_80x24_fits_without_starving_header_or_ports() {
+    let c = draw_at(80, 24);
+    assert!(c.contains("Ports"), "ports card collapsed at 80x24");
+    assert!(c.contains("Processes"), "process table missing at 80x24");
+    // header facts line ("up <duration> · load <n>") must still render, i.e.
+    // the header row wasn't squeezed to make room for the ports Min(4) floor.
+    assert!(c.contains("up ") || c.contains("load "), "header facts missing at 80x24");
+}
+
+// At generous heights the middle (process table) row should claim its full
+// cap (MAX_VISIBLE_PROCS rows + footer + borders) rather than the ports card
+// eating into it — Max(13) should behave like Length(13) once there's slack.
+#[test]
+fn large_size_gives_process_table_its_full_cap() {
+    let c = draw_at(160, 45);
+    assert!(c.contains("Ports"));
+    // App::demo() only seeds 3 processes, so we can't pin an 11th-row
+    // absence; instead assert the demo processes and the ports project
+    // badge both render, confirming neither panel starved the other.
+    assert!(c.contains("(my-app)"), "port project badge missing at 160x45");
+    assert!(c.contains("kernel_task"), "process rows missing at 160x45");
+}
