@@ -1,5 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Focus};
 use super::theme;
@@ -24,28 +24,36 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         return;
     }
 
-    let mut spans = Vec::new();
-    for (i, p) in slow.ports.iter().enumerate() {
+    // One port per line, scrolled so the selection stays visible.
+    let visible_rows = inner.height as usize;
+    let offset = if focused {
+        app.selected.saturating_sub(visible_rows.saturating_sub(1))
+    } else {
+        0
+    };
+
+    let mut lines = Vec::new();
+    for (i, p) in slow.ports.iter().enumerate().skip(offset).take(visible_rows) {
         let selected = focused && i == app.selected;
         let style = if selected {
             Style::default().fg(theme::BG_CELL).bg(theme::ACCENT)
         } else {
             Style::default().fg(theme::ACCENT)
         };
-        spans.push(Span::styled(format!(":{}", p.port), style.bold()));
-        spans.push(Span::styled(
-            format!(" {} ", p.process),
-            if selected { style.bold() } else { Style::default().fg(theme::TEXT) },
-        ));
+        let mut spans = vec![
+            Span::styled(format!(":{:<5}", p.port), style.bold()),
+            Span::styled(
+                format!(" {} ", p.process),
+                if selected { style.bold() } else { Style::default().fg(theme::TEXT) },
+            ),
+        ];
         if let Some(project) = &p.project {
             spans.push(Span::styled(
-                format!("({project}) "),
+                format!("({project})"),
                 if selected { style } else { Style::default().fg(theme::DIM) },
             ));
         }
-        if i < slow.ports.len() - 1 {
-            spans.push(Span::styled("· ", Style::default().fg(theme::DIM)));
-        }
+        lines.push(Line::from(spans));
     }
-    f.render_widget(Paragraph::new(Line::from(spans)).wrap(Wrap { trim: true }), inner);
+    f.render_widget(Paragraph::new(lines), inner);
 }
