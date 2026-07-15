@@ -62,3 +62,30 @@ fn large_size_gives_process_table_its_full_cap() {
     assert!(c.contains("(my-app)"), "port project badge missing at 160x45");
     assert!(c.contains("kernel_task"), "process rows missing at 160x45");
 }
+
+// The ports card lives in the LEFT column under the process table, not in a
+// full-width bottom row: on the terminal row where the ports panel's title
+// border is drawn, the rightmost cell must belong to the network panel's
+// right border ('│'), not a ports corner ('╮'), which is what a full-width
+// ports row would put there.
+#[test]
+fn ports_card_sits_under_processes_not_full_width() {
+    let (w, h) = (160u16, 45u16);
+    let flat = draw_at(w, h);
+    let cells: Vec<char> = flat.chars().collect();
+    let lines: Vec<String> = cells
+        .chunks(w as usize)
+        .map(|row| row.iter().collect())
+        .collect();
+    assert_eq!(lines.len(), h as usize);
+    let ports_row = lines
+        .iter()
+        .position(|l| l.contains("Ports"))
+        .expect("ports title row present");
+    let last_char = lines[ports_row].chars().last().unwrap();
+    assert_eq!(
+        last_char, '│',
+        "ports title row should end inside the network panel's right border, \
+         got {last_char:?} (full-width ports row?)"
+    );
+}
