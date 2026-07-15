@@ -25,6 +25,12 @@ fn restore_terminal() {
 }
 
 fn main() -> io::Result<()> {
+    // Die quietly on a closed pipe (`whirr --list-sensors | head`) instead of
+    // panicking — restore the default SIGPIPE disposition Rust overrides.
+    unsafe {
+        libc::signal(libc::SIGPIPE, libc::SIG_DFL);
+    }
+
     // Diagnostic hook: dump HID temperature sensors and IOReport Energy
     // Model channels. Must run before terminal setup so it works without a
     // TTY.
