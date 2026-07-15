@@ -74,3 +74,28 @@ Everything else (panels, keys, samplers, perf budget) is unchanged.
 
 - Slow tick only; +1 syscall per listening pid per 10s. No measurable
   impact on the < 0.5% CPU budget.
+
+## Layout revision (2026-07-15, post-v0.2 feedback)
+
+The ports card moves from a full-width bottom row into the **left column,
+under the processes table** (user-selected mockup):
+
+```
+┌─ header ──────────────────────────┐
+├─ CPU ─┬─ Temp ─┬─ Power ─┬─ Mem ──┤
+├─ Processes (10) ──┬─ Network ─────┤
+│ …                 │ ▼▲ waveform   │
+├─ Ports ───────────┤ (full body    │
+│ :3000 node (app)  │  height)      │
+└───────────────────┴───────────────┘
+```
+
+- Body splits horizontally first: left `Ratio(3,5)`, right `Ratio(2,5)`.
+- Left column stacks processes (`Max(MAX_VISIBLE_PROCS + 3)`) over ports
+  (`Min(4)`); the same solver-verified graceful collapse applies within
+  the column at heights 20–29.
+- Network spans the full body height in the right column.
+- Collapse priority and thresholds unchanged: ports drop below height 20
+  (left column = processes only), network drops below height 16 (left
+  column takes full width).
+- Render-test geometry assertions updated for the new arrangement.
