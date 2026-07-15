@@ -159,6 +159,55 @@ impl ProcScanner {
     }
 }
 
+const PROC_PIDVNODEPATHINFO: libc::c_int = 9;
+const MAXPATHLEN: usize = 1024;
+/// sizeof(struct vnode_info): struct vinfo_stat (136) + vi_type + vi_pad +
+/// vi_fsid[2] — verified against <sys/proc_info.h>, see Task 1 Step 1.
+const VNODE_INFO_SIZE: usize = 152;
+
+/// `struct vnode_info_path` from `<sys/proc_info.h>`. The leading
+/// `vnode_info` is opaque padding here — only the path matters.
+#[repr(C)]
+struct VnodeInfoPath {
+    _vi: [u8; VNODE_INFO_SIZE],
+    vip_path: [u8; MAXPATHLEN],
+}
+
+/// `struct proc_vnodepathinfo` from `<sys/proc_info.h>`.
+#[repr(C)]
+struct ProcVnodePathInfo {
+    pvi_cdir: VnodeInfoPath,
+    pvi_rdir: VnodeInfoPath,
+}
+
+/// Basename of `pid`'s current working directory. `None` for pids we may
+/// not inspect (other users), dead pids, `/`, or any FFI failure.
+pub fn cwd_basename(pid: i32) -> Option<String> {
+    let mut info: ProcVnodePathInfo = unsafe { std::mem::zeroed() };
+    let sz = std::mem::size_of::<ProcVnodePathInfo>() as libc::c_int;
+    let r = unsafe {
+        proc_pidinfo(
+            pid,
+            PROC_PIDVNODEPATHINFO,
+            0,
+            &mut info as *mut _ as *mut libc::c_void,
+            sz,
+        )
+    };
+    if r != sz {
+        return None;
+    }
+    let path = &info.pvi_cdir.vip_path;
+    let end = path.iter().position(|&b| b == 0).unwrap_or(path.len());
+    let s = std::str::from_utf8(&path[..end]).ok()?;
+    if s.is_empty() || s == "/" {
+        return None;
+    }
+    std::path::Path::new(s)
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+}
+
 fn read_name(pid: i32) -> String {
     let mut buf = [0u8; 128];
     let r = unsafe { proc_name(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
@@ -203,5 +252,22 @@ mod tests {
         let procs = scanner.scan();
         assert!(procs.len() > 50, "expected many processes, got {}", procs.len());
         assert!(procs.iter().all(|p| p.pid > 0));
+    }
+
+    #[test]
+    fn cwd_basename_of_self_matches_current_dir() {
+        let expect = std::env::current_dir()
+            .unwrap()
+            .file_name()
+            .unwrap()
+            .to_string_lossy()
+            .into_owned();
+        let got = super::cwd_basename(std::process::id() as i32).expect("own cwd readable");
+        assert_eq!(got, expect);
+    }
+
+    #[test]
+    fn cwd_basename_of_dead_pid_is_none() {
+        assert_eq!(super::cwd_basename(-1), None);
     }
 }
