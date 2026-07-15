@@ -73,6 +73,8 @@ pub struct PortInfo {
     pub port: u16,
     pub process: String,
     pub pid: i32,
+    /// Basename of the owning process's cwd — "which project is this?".
+    pub project: Option<String>,
 }
 
 pub struct SlowSnap {

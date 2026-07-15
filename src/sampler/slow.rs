@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
@@ -21,6 +21,7 @@ pub fn parse_lsof(output: &str) -> Vec<PortInfo> {
                             port,
                             process: cmd.clone(),
                             pid,
+                            project: None,
                         });
                     }
                 }
@@ -31,6 +32,18 @@ pub fn parse_lsof(output: &str) -> Vec<PortInfo> {
     by_port.into_values().collect()
 }
 
+/// Fill `project` via `lookup`, calling it once per unique pid (a process
+/// often listens on several ports).
+pub fn enrich_projects(
+    ports: &mut [PortInfo],
+    mut lookup: impl FnMut(i32) -> Option<String>,
+) {
+    let mut cache: HashMap<i32, Option<String>> = HashMap::new();
+    for p in ports.iter_mut() {
+        p.project = cache.entry(p.pid).or_insert_with(|| lookup(p.pid)).clone();
+    }
+}
+
 pub fn run(tx: Sender<Snapshot>) {
     let mut last_good: Vec<PortInfo> = Vec::new();
     loop {
@@ -39,7 +52,9 @@ pub fn run(tx: Sender<Snapshot>) {
             .output();
         let snap = match output {
             Ok(out) if out.status.success() || !out.stdout.is_empty() => {
-                last_good = parse_lsof(&String::from_utf8_lossy(&out.stdout));
+                let mut ports = parse_lsof(&String::from_utf8_lossy(&out.stdout));
+                enrich_projects(&mut ports, crate::mac::proc::cwd_basename);
+                last_good = ports;
                 SlowSnap { ports: last_good.clone(), stale: false }
             }
             // lsof exits with status 1 and empty stdout when nothing matches
@@ -71,7 +86,7 @@ pub fn run(tx: Sender<Snapshot>) {
 // to the real `lsof` binary; it's exercised manually / via the app.
 #[cfg(test)]
 mod tests {
-    use super::parse_lsof;
+    use super::{parse_lsof, enrich_projects};
 
     const FIXTURE: &str = "\
 p512
@@ -93,11 +108,17 @@ n*:7000
     #[test]
     fn parses_and_dedups_ports() {
         let ports = parse_lsof(FIXTURE);
-        let view: Vec<(u16, &str, i32)> =
-            ports.iter().map(|p| (p.port, p.process.as_str(), p.pid)).collect();
+        let view: Vec<(u16, &str, i32, Option<&str>)> = ports
+            .iter()
+            .map(|p| (p.port, p.process.as_str(), p.pid, p.project.as_deref()))
+            .collect();
         assert_eq!(
             view,
-            vec![(3000, "node", 9001), (5432, "postgres", 512), (7000, "Control Center", 9002)]
+            vec![
+                (3000, "node", 9001, None),
+                (5432, "postgres", 512, None),
+                (7000, "Control Center", 9002, None)
+            ]
         );
     }
 
@@ -105,5 +126,21 @@ n*:7000
     fn ignores_garbage() {
         assert!(parse_lsof("").is_empty());
         assert!(parse_lsof("nonsense\nlines\n").is_empty());
+    }
+
+    #[test]
+    fn enrich_fills_project_per_pid_once() {
+        let mut ports = parse_lsof(FIXTURE);
+        let mut calls = 0;
+        enrich_projects(&mut ports, |pid| {
+            calls += 1;
+            (pid == 9001).then(|| "my-app".to_string())
+        });
+        assert_eq!(calls, 3); // one lookup per unique pid
+        assert_eq!(
+            ports.iter().find(|p| p.port == 3000).unwrap().project.as_deref(),
+            Some("my-app")
+        );
+        assert_eq!(ports.iter().find(|p| p.port == 5432).unwrap().project, None);
     }
 }

@@ -37,6 +37,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             format!(" {} ", p.process),
             if selected { style.bold() } else { Style::default().fg(theme::TEXT) },
         ));
+        if let Some(project) = &p.project {
+            spans.push(Span::styled(
+                format!("({project}) "),
+                if selected { style } else { Style::default().fg(theme::DIM) },
+            ));
+        }
         if i < slow.ports.len() - 1 {
             spans.push(Span::styled("· ", Style::default().fg(theme::DIM)));
         }

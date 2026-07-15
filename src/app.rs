@@ -100,9 +100,9 @@ impl App {
         }));
         app.ingest(Snapshot::Slow(SlowSnap {
             ports: vec![
-                PortInfo { port: 22, process: "sshd".into(), pid: 1 },
-                PortInfo { port: 8080, process: "whirr-dev".into(), pid: 303 },
-                PortInfo { port: 5432, process: "postgres".into(), pid: 55 },
+                PortInfo { port: 22, process: "sshd".into(), pid: 1, project: None },
+                PortInfo { port: 8080, process: "whirr-dev".into(), pid: 303, project: Some("my-app".into()) },
+                PortInfo { port: 5432, process: "postgres".into(), pid: 55, project: None },
             ],
             stale: false,
         }));
