@@ -17,6 +17,7 @@ use crate::app::App;
 /// tight: ports first, then network, then power, then temp — processes and
 /// CPU always survive. The gauges row splits into as many equal columns as
 /// there are visible gauge panels (cpu + temp? + power? + memory).
+/// Process table capped at 10 rows; ports card grows with available height.
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let show_ports = area.height >= 20;
@@ -24,9 +25,12 @@ pub fn draw(f: &mut Frame, app: &App) {
     let show_power = area.width >= 70;
     let show_temp = area.width >= 50;
 
-    let mut rows = vec![Constraint::Length(3), Constraint::Length(10), Constraint::Min(6)];
+    let mut rows = vec![Constraint::Length(3), Constraint::Length(10)];
     if show_ports {
-        rows.push(Constraint::Length(4));
+        rows.push(Constraint::Length(13));
+        rows.push(Constraint::Min(4));
+    } else {
+        rows.push(Constraint::Min(6));
     }
     let chunks = Layout::vertical(rows).split(area);
 

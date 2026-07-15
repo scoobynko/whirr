@@ -25,6 +25,7 @@ fn full_size_shows_all_panels() {
     for needle in ["CPU", "Temp", "Power", "Memory", "Processes", "Network", "Ports"] {
         assert!(c.contains(needle), "missing {needle}");
     }
+    assert!(c.contains("(my-app)"), "port project badge missing");
 }
 
 #[test]

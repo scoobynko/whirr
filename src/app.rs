@@ -19,6 +19,9 @@ pub enum SortBy {
     Mem,
 }
 
+/// The process table shows at most this many rows; selection clamps with it.
+pub const MAX_VISIBLE_PROCS: usize = 10;
+
 pub struct App {
     pub statics: SystemStatic,
     pub fast: Option<FastSnap>,
@@ -143,7 +146,7 @@ impl App {
 
     fn focused_len(&self) -> usize {
         match self.focus {
-            Focus::Processes => self.fast.as_ref().map_or(0, |f| f.processes.len()),
+            Focus::Processes => self.visible_processes().len(),
             Focus::Ports => self.slow.as_ref().map_or(0, |s| s.ports.len()),
         }
     }
@@ -153,7 +156,9 @@ impl App {
     }
 
     pub fn visible_processes(&self) -> &[ProcInfo] {
-        self.fast.as_ref().map_or(&[], |f| &f.processes)
+        self.fast.as_ref().map_or(&[], |f| {
+            &f.processes[..f.processes.len().min(MAX_VISIBLE_PROCS)]
+        })
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -236,9 +241,8 @@ mod tests {
         KeyEvent::from(KeyCode::Char(c))
     }
 
-    fn app_with_procs() -> App {
-        let mut a = App::new(false);
-        a.ingest(Snapshot::Fast(FastSnap {
+    fn demo_fast() -> FastSnap {
+        FastSnap {
             per_core: vec![50.0],
             total_cpu: 50.0,
             processes: vec![
@@ -247,7 +251,12 @@ mod tests {
             ],
             net_rx_rate: 0.0, net_tx_rate: 0.0, net_rx_total: 0, net_tx_total: 0,
             load_avg: 1.0, mem_total: 1,
-        }));
+        }
+    }
+
+    fn app_with_procs() -> App {
+        let mut a = App::new(false);
+        a.ingest(Snapshot::Fast(demo_fast()));
         a
     }
 
@@ -298,5 +307,26 @@ mod tests {
         a.ingest(Snapshot::Fast(f));
         assert!(a.fan_interval() < idle);
         assert_eq!(a.fan_interval().as_millis(), 100);
+    }
+
+    #[test]
+    fn process_view_caps_at_ten() {
+        let mut a = App::new(false);
+        let procs: Vec<ProcInfo> = (0..30)
+            .map(|i| ProcInfo {
+                pid: i,
+                name: format!("p{i}"),
+                cpu: 30.0 - i as f32,
+                mem: 100,
+            })
+            .collect();
+        let mut f = demo_fast();
+        f.processes = procs;
+        a.ingest(Snapshot::Fast(f));
+        assert_eq!(a.visible_processes().len(), 10);
+        for _ in 0..15 {
+            a.on_key(KeyEvent::from(KeyCode::Down));
+        }
+        assert_eq!(a.selected, 9);
     }
 }
