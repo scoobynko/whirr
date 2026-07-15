@@ -217,6 +217,69 @@ fn read_name(pid: i32) -> String {
     String::from_utf8_lossy(&buf[..r as usize]).into_owned()
 }
 
+/// A process's true executable path and argument vector.
+pub struct ProcArgs {
+    pub exec_path: String,
+    pub argv: Vec<String>,
+}
+
+/// Read `pid`'s exec path + argv via the `KERN_PROCARGS2` sysctl. Buffer
+/// layout: `[argc: i32][exec_path\0][NUL padding][argv0\0 argv1\0 …][env…]`.
+/// `None` for pids we may not inspect (other users), dead pids, or any
+/// parse/FFI failure. Never panics.
+pub fn args(pid: i32) -> Option<ProcArgs> {
+    let argmax = crate::mac::sysctl::sysctl_u64("kern.argmax")? as usize;
+    let mut buf = vec![0u8; argmax.clamp(4096, 1024 * 1024)];
+    let mut size = buf.len();
+    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
+    let rc = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            buf.as_mut_ptr().cast(),
+            &mut size,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if rc != 0 || size < 4 {
+        return None;
+    }
+    buf.truncate(size);
+
+    let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]).max(0) as usize;
+    let mut i = 4;
+    let take_cstr = |i: &mut usize| -> Option<String> {
+        let start = *i;
+        while *i < buf.len() && buf[*i] != 0 {
+            *i += 1;
+        }
+        if start >= buf.len() {
+            return None;
+        }
+        let s = String::from_utf8_lossy(&buf[start..*i]).into_owned();
+        *i += 1; // step past the NUL
+        Some(s)
+    };
+
+    let exec_path = take_cstr(&mut i)?;
+    // Skip the NUL padding between exec_path and argv[0].
+    while i < buf.len() && buf[i] == 0 {
+        i += 1;
+    }
+    let mut argv = Vec::with_capacity(argc);
+    for _ in 0..argc {
+        match take_cstr(&mut i) {
+            Some(s) => argv.push(s),
+            None => break,
+        }
+    }
+    if exec_path.is_empty() {
+        return None;
+    }
+    Some(ProcArgs { exec_path, argv })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -269,5 +332,20 @@ mod tests {
     #[test]
     fn cwd_basename_of_dead_pid_is_none() {
         assert_eq!(super::cwd_basename(-1), None);
+    }
+
+    #[test]
+    fn args_of_self_are_plausible() {
+        let pa = super::args(std::process::id() as i32).expect("own args readable");
+        assert!(pa.exec_path.starts_with('/'), "exec_path: {}", pa.exec_path);
+        assert!(!pa.argv.is_empty());
+        // The test binary's argv[0] ends with the harness binary name.
+        assert!(pa.argv[0].contains("proc") || pa.argv[0].contains("whirr"),
+            "argv[0]: {}", pa.argv[0]);
+    }
+
+    #[test]
+    fn args_of_dead_pid_is_none() {
+        assert!(super::args(-1).is_none());
     }
 }

@@ -3,9 +3,108 @@ use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
+use crate::mac::proc::ProcArgs;
 use super::{PortInfo, SlowSnap, Snapshot};
 
 const TICK: Duration = Duration::from_secs(10);
+
+/// Max rendered length of a smart label.
+const LABEL_MAX: usize = 28;
+
+/// Path components that carry no identity when walking up from a
+/// version-named executable (`…/claude/versions/2.1.187` → "claude").
+const GENERIC_DIRS: [&str; 7] =
+    ["versions", "bin", "sbin", "libexec", "contents", "macos", "current"];
+
+/// Interpreters whose own name says little — the argv usually says more.
+const INTERPRETERS: [&str; 11] = [
+    "node", "python", "python3", "bun", "deno", "ruby", "java", "perl", "sh", "bash", "zsh",
+];
+
+/// `2.1.187`, `v18.2.0`, … — optional `v` + at least two dot-separated
+/// numeric parts.
+fn version_like(s: &str) -> bool {
+    let s = s.strip_prefix('v').unwrap_or(s);
+    let parts: Vec<&str> = s.split('.').collect();
+    parts.len() >= 2
+        && parts
+            .iter()
+            .all(|p| !p.is_empty() && p.chars().all(|c| c.is_ascii_digit()))
+}
+
+fn basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+/// A short "what is this really?" label for a listening process: real app
+/// name (resolved past version-named binaries) plus a hint from its
+/// arguments. Falls back to the raw lsof name when args are unreadable
+/// (other users' processes / system daemons).
+pub fn smart_label(raw: &str, args: Option<&ProcArgs>) -> String {
+    let Some(pa) = args else {
+        return raw.to_string();
+    };
+    let exec_base = basename(&pa.exec_path);
+    let argv0_base = pa.argv.first().map(|a| basename(a)).unwrap_or_default();
+
+    let name = if version_like(exec_base) {
+        // Walk ancestors past generic/version components to something real.
+        pa.exec_path
+            .split('/')
+            .rev()
+            .skip(1)
+            .find(|c| {
+                c.len() > 1
+                    && !version_like(c)
+                    && !GENERIC_DIRS.contains(&c.to_lowercase().as_str())
+            })
+            .unwrap_or(raw)
+    } else if INTERPRETERS.contains(&exec_base)
+        && !argv0_base.is_empty()
+        && argv0_base != exec_base
+    {
+        // e.g. npm running under the node binary.
+        argv0_base
+    } else {
+        exec_base
+    };
+
+    let hint = pa.argv.get(1).map(|first| {
+        if first.starts_with('-') {
+            // Flag: keep its name, drop any =value.
+            first.split('=').next().unwrap_or(first).to_string()
+        } else {
+            // Script / subcommand: basename, plus one more short word.
+            let mut h = basename(first).to_string();
+            if let Some(second) = pa.argv.get(2) {
+                if !second.starts_with('-') && h.len() + second.len() < 18 {
+                    h.push(' ');
+                    h.push_str(second);
+                }
+            }
+            h
+        }
+    });
+
+    let label = match hint {
+        Some(h) if !h.is_empty() => format!("{name} {h}"),
+        _ => name.to_string(),
+    };
+    label.chars().take(LABEL_MAX).collect()
+}
+
+/// Rewrite each port's process name with its smart label, calling `lookup`
+/// once per unique pid (a process often listens on several ports).
+pub fn apply_smart_labels(
+    ports: &mut [PortInfo],
+    mut lookup: impl FnMut(i32) -> Option<ProcArgs>,
+) {
+    let mut cache: HashMap<i32, Option<ProcArgs>> = HashMap::new();
+    for p in ports.iter_mut() {
+        let pa = cache.entry(p.pid).or_insert_with(|| lookup(p.pid));
+        p.process = smart_label(&p.process, pa.as_ref());
+    }
+}
 
 pub fn parse_lsof(output: &str) -> Vec<PortInfo> {
     let mut by_port: BTreeMap<u16, PortInfo> = BTreeMap::new();
@@ -54,6 +153,7 @@ pub fn run(tx: Sender<Snapshot>) {
             Ok(out) if out.status.success() || !out.stdout.is_empty() => {
                 let mut ports = parse_lsof(&String::from_utf8_lossy(&out.stdout));
                 enrich_projects(&mut ports, crate::mac::proc::cwd_basename);
+                apply_smart_labels(&mut ports, crate::mac::proc::args);
                 last_good = ports;
                 SlowSnap { ports: last_good.clone(), stale: false }
             }
@@ -86,7 +186,8 @@ pub fn run(tx: Sender<Snapshot>) {
 // to the real `lsof` binary; it's exercised manually / via the app.
 #[cfg(test)]
 mod tests {
-    use super::{parse_lsof, enrich_projects};
+    use super::{apply_smart_labels, enrich_projects, parse_lsof, smart_label};
+    use crate::mac::proc::ProcArgs;
 
     const FIXTURE: &str = "\
 p512
@@ -128,6 +229,70 @@ n*:7000
         assert!(parse_lsof("nonsense\nlines\n").is_empty());
     }
 
+    fn pa(exec: &str, argv: &[&str]) -> ProcArgs {
+        ProcArgs {
+            exec_path: exec.to_string(),
+            argv: argv.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[test]
+    fn smart_label_resolves_version_named_binary() {
+        let a = pa(
+            "/Users/x/.local/share/claude/versions/2.1.187",
+            &["/Users/x/.local/share/claude/versions/2.1.187", "--bg-spare", "/tmp/x.sock"],
+        );
+        assert_eq!(smart_label("2.1.187", Some(&a)), "claude --bg-spare");
+    }
+
+    #[test]
+    fn smart_label_shows_interpreter_script() {
+        let a = pa("/usr/local/bin/node", &["node", "server.js"]);
+        assert_eq!(smart_label("node", Some(&a)), "node server.js");
+    }
+
+    #[test]
+    fn smart_label_uses_argv0_for_interpreter_wrappers() {
+        let a = pa("/usr/local/bin/node", &["npm", "run", "dev"]);
+        assert_eq!(smart_label("node", Some(&a)), "npm run dev");
+    }
+
+    #[test]
+    fn smart_label_strips_flag_values() {
+        let a = pa("/opt/thing/bin/thing", &["thing", "--port=8080"]);
+        assert_eq!(smart_label("thing", Some(&a)), "thing --port");
+    }
+
+    #[test]
+    fn smart_label_falls_back_to_raw() {
+        assert_eq!(smart_label("rapportd", None), "rapportd");
+        // Version-named exec with no meaningful ancestor falls back to raw.
+        let a = pa("/2.0.1", &["/2.0.1"]);
+        assert_eq!(smart_label("mystery", Some(&a)), "mystery");
+    }
+
+    #[test]
+    fn smart_label_truncates() {
+        let a = pa(
+            "/usr/bin/supercalifragilistic-server-daemon",
+            &["supercalifragilistic-server-daemon", "--enable-extremely-verbose-logging"],
+        );
+        assert!(smart_label("x", Some(&a)).chars().count() <= 28);
+    }
+
+    #[test]
+    fn apply_smart_labels_caches_per_pid() {
+        let mut ports = parse_lsof(FIXTURE);
+        let mut calls = 0;
+        apply_smart_labels(&mut ports, |pid| {
+            calls += 1;
+            (pid == 9001).then(|| pa("/apps/webserver/versions/1.2.3", &["1.2.3", "--serve"]))
+        });
+        assert_eq!(calls, 3); // one lookup per unique pid
+        assert_eq!(ports.iter().find(|p| p.port == 3000).unwrap().process, "webserver --serve");
+        assert_eq!(ports.iter().find(|p| p.port == 5432).unwrap().process, "postgres");
+    }
+
     #[test]
     fn enrich_fills_project_per_pid_once() {
         let mut ports = parse_lsof(FIXTURE);
@@ -144,3 +309,4 @@ n*:7000
         assert_eq!(ports.iter().find(|p| p.port == 5432).unwrap().project, None);
     }
 }
+
