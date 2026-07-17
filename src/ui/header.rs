@@ -29,24 +29,25 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
     [" ╲   ", "  ✻  ", "   ╲ "],
 ];
 
-// Full-tier star fan: a windmill of four 2-cell ✳ arms on a FAN_H x FAN_W
-// grid, jumping between the + and × positions each frame. A 4-arm wheel
-// turning 45° per step shows exactly these two states, so the flip reads
-// as spinning without any color animation. Single brand color.
-const FAN_H: usize = 5;
-const FAN_W: usize = 11;
-const WINDMILL: [[[(usize, usize); 2]; 4]; 2] = [
+// Full-tier star fan: a windmill flipping between + and × states, 4 rows
+// tall to match the hero font/logo height. Blades are double-asterisk
+// strokes (✳✳ pairs; horizontal arms are 2 rows thick instead, countering
+// the ~2:1 cell aspect) like the e2b.dev asterisk. The flip advances every
+// FAN_FLIP_TICKS ticks — a 4-arm wheel turning 45° per step shows exactly
+// these two states. Single brand color.
+const FAN_FLIP_TICKS: usize = 4;
+const WINDMILL: [[&str; 4]; 2] = [
     [
-        [(1, 5), (0, 5)], // N
-        [(2, 7), (2, 9)], // E
-        [(3, 5), (4, 5)], // S
-        [(2, 3), (2, 1)], // W
+        "    ✳✳    ",
+        "✳ ✳ ✳✳ ✳ ✳",
+        "✳ ✳ ✳✳ ✳ ✳",
+        "    ✳✳    ",
     ],
     [
-        [(1, 7), (0, 9)], // NE
-        [(3, 7), (4, 9)], // SE
-        [(3, 3), (4, 1)], // SW
-        [(1, 3), (0, 1)], // NW
+        "✳✳      ✳✳",
+        "  ✳✳  ✳✳  ",
+        "  ✳✳  ✳✳  ",
+        "✳✳      ✳✳",
     ],
 ];
 
@@ -121,22 +122,10 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
-    let mut grid = [[false; FAN_W]; FAN_H];
-    for arm in WINDMILL[frame % 2] {
-        for (r, c) in arm {
-            grid[r][c] = true;
-        }
-    }
-    let style = Style::default().fg(theme::ACCENT);
-    let lines: Vec<Line> = grid
+    let state = WINDMILL[(frame / FAN_FLIP_TICKS) % 2];
+    let lines: Vec<Line> = state
         .iter()
-        .map(|row| {
-            Line::from(
-                row.iter()
-                    .map(|&on| if on { Span::styled("✳", style) } else { Span::raw(" ") })
-                    .collect::<Vec<_>>(),
-            )
-        })
+        .map(|l| Line::styled(*l, Style::default().fg(theme::ACCENT)))
         .collect();
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -185,7 +174,17 @@ mod tests {
     }
 
     #[test]
-    fn windmill_flips_between_plus_and_cross() {
+    fn windmill_states_are_four_rows_matching_the_font() {
+        for state in super::WINDMILL {
+            assert_eq!(state.len(), 4, "fan must match the 4-row font height");
+            assert!(state.iter().all(|r| r.chars().count() == 10));
+            let stars: usize = state.iter().map(|r| r.matches("✳").count()).sum();
+            assert_eq!(stars, 16, "double-asterisk blades, 16 cells per state");
+        }
+    }
+
+    #[test]
+    fn windmill_flips_every_fourth_tick() {
         let draw_frame = |f: usize| -> String {
             let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
             let mut app = App::demo();
@@ -193,11 +192,9 @@ mod tests {
             t.draw(|fr| super::render(fr, fr.area(), &app)).unwrap();
             t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
         };
-        let (plus, cross, plus_again) = (draw_frame(0), draw_frame(1), draw_frame(2));
-        assert_eq!(plus.matches("✳").count(), 8, "4 arms x 2 cells in + state");
-        assert_eq!(cross.matches("✳").count(), 8, "4 arms x 2 cells in x state");
-        assert_ne!(plus, cross, "the windmill must flip between frames");
-        assert_eq!(plus, plus_again, "the flip must have period 2");
+        assert_eq!(draw_frame(0), draw_frame(3), "state must hold for 4 ticks");
+        assert_ne!(draw_frame(0), draw_frame(4), "state must flip on the 4th tick");
+        assert_ne!(draw_frame(3), draw_frame(4), "flip boundary at frame 4");
     }
 
     use ratatui::backend::TestBackend;

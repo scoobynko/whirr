@@ -52,22 +52,23 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
 - Star fan (final form — windmill flip, chosen by user after trying color
-  flip, rotating gap, and continuous rotation): four 2-cell ✳ arms on an
-  11×5 grid jumping between the + and × positions each frame, all in
-  ACCENT teal. A 4-arm wheel turning 45° per step shows exactly these two
-  states, so the flip reads as spinning. The + state:
+  flip, rotating gap, and continuous rotation): a 10×4 windmill jumping
+  between + and × states, all in ACCENT teal. Four rows tall to match the
+  hero font/logo height; blades are e2b.dev-style double-asterisk strokes
+  (✳✳ pairs; horizontal arms 2 rows thick to counter cell aspect). The
+  state flips every 4 fan ticks (~1s idle, ~0.2s loaded). The + state:
 
 ```
-     ✳
-     ✳
- ✳ ✳   ✳ ✳
-     ✳
-     ✳
+    ✳✳
+✳ ✳ ✳✳ ✳ ✳
+✳ ✳ ✳✳ ✳ ✳
+    ✳✳
 ```
 
-- `App::tick_fan` advances modulo 8; the windmill flips on frame parity.
-  `fan_interval` stays 250ms idle → 50ms loaded; load-scaling unchanged;
-  the compact fan derives its 4-frame cycle as `(fan_frame / 2) % 4`.
+- `App::tick_fan` advances modulo 8; the windmill state is
+  `(fan_frame / 4) % 2`. `fan_interval` stays 250ms idle → 50ms loaded;
+  load-scaling unchanged; the compact fan derives its 4-frame cycle as
+  `(fan_frame / 2) % 4`.
 - `--no-fan` continues to hide the fan.
 
 **Compact tier** (given 3 rows): today's header verbatim — 3-row logo,
