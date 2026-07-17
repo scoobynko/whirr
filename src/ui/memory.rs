@@ -4,7 +4,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::App;
 use crate::sampler::PressureLevel;
 use crate::units::fmt_bytes;
-use super::theme;
+use super::{font, theme};
 
 pub fn segment_widths(parts: &[u64], width: u16) -> Vec<u16> {
     let total: u64 = parts.iter().sum();
@@ -77,24 +77,64 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             .collect::<Vec<_>>(),
     );
 
-    let lines = vec![
-        Line::from(vec![
+    let swap = format!("swap {} / {}", fmt_bytes(mem.swap_used), fmt_bytes(mem.swap_total));
+
+    if font::hero_fits(inner) {
+        let used = mem.app + mem.wired + mem.compressed;
+        let used_gib = used as f64 / 1_073_741_824.0;
+        let hero: Vec<Line> = font::big_text(&format!("{used_gib:.1}G"))
+            .into_iter()
+            .map(|r| Line::styled(r, Style::default().fg(pcolor)))
+            .collect();
+        let mut lines = hero;
+        lines.push(Line::from(""));
+        lines.push(Line::from(bar));
+        lines.push(legend);
+        lines.push(Line::from(vec![
             Span::styled("pressure ", Style::default().fg(theme::DIM)),
             Span::styled(state, Style::default().fg(pcolor).bold()),
-        ]),
-        Line::from(bar),
-        legend,
-        Line::styled(
-            format!("swap {} / {}", fmt_bytes(mem.swap_used), fmt_bytes(mem.swap_total)),
-            Style::default().fg(theme::DIM),
-        ),
-    ];
-    f.render_widget(Paragraph::new(lines), inner);
+            Span::styled(format!(" · {swap}"), Style::default().fg(theme::DIM)),
+        ]));
+        f.render_widget(Paragraph::new(lines), inner);
+    } else {
+        let lines = vec![
+            Line::from(vec![
+                Span::styled("pressure ", Style::default().fg(theme::DIM)),
+                Span::styled(state, Style::default().fg(pcolor).bold()),
+            ]),
+            Line::from(bar),
+            legend,
+            Line::styled(swap, Style::default().fg(theme::DIM)),
+        ];
+        f.render_widget(Paragraph::new(lines), inner);
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::segment_widths;
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+
+    fn draw(w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn hero_shows_used_gib_when_room() {
+        // demo used = 4G + 2G + 1G = 7_000_000_000 B = 6.5 GiB → "6.5G"
+        let full = draw(40, 12);
+        assert!(full.contains("█▄▄ "), "4-row '6' glyph missing"); // '6' row 1
+        assert!(full.contains("pressure NORMAL · swap"), "consolidated info line missing");
+        let compact = draw(40, 10);
+        assert!(!compact.contains("█▄▄ "));
+        assert!(compact.contains("pressure "));
+    }
 
     #[test]
     fn widths_sum_and_respect_minimums() {
