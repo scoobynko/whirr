@@ -29,24 +29,15 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
     [" ╲   ", "  ✻  ", "   ╲ "],
 ];
 
-// Full-tier star fan: 8 arms of ✳ cells radiating from an empty hub,
-// clockwise from N, each arm two (row, col) cells on a FAN_H x FAN_W grid.
-// Odd columns keep diagonal/horizontal arms visually 45°/90° despite the
-// ~2:1 cell aspect. Animation: one arm is always hidden and the gap
-// advances one position per frame, so the wheel reads as rotating without
-// any color change.
+// Full-tier star fan: 8 arms of ✳ cells radiating from an empty hub on a
+// FAN_H x FAN_W grid, rasterized fresh each frame so the whole star
+// genuinely rotates through intermediate angles (like the e2b.dev
+// asterisk) instead of snapping between the 8 cardinal positions. One
+// revolution takes FAN_ROT_FRAMES frames (15° per tick); arms alternate
+// the two brand tones, and the tones travel with the arms.
 const FAN_H: usize = 5;
 const FAN_W: usize = 11;
-const FAN_ARMS: [[(usize, usize); 2]; 8] = [
-    [(1, 5), (0, 5)], // N
-    [(1, 7), (0, 9)], // NE
-    [(2, 7), (2, 9)], // E
-    [(3, 7), (4, 9)], // SE
-    [(3, 5), (4, 5)], // S
-    [(3, 3), (4, 1)], // SW
-    [(2, 3), (2, 1)], // W
-    [(1, 3), (0, 1)], // NW
-];
+const FAN_ROT_FRAMES: usize = 24;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Full tier needs 7 rows: 1 (top pad) + 5 (band) + 1 (bottom pad).
@@ -119,23 +110,31 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
-    let mut grid = [[false; FAN_W]; FAN_H];
-    let gap = frame % FAN_ARMS.len();
-    for (i, arm) in FAN_ARMS.iter().enumerate() {
-        if i == gap {
-            continue;
-        }
-        for &(r, c) in arm {
-            grid[r][c] = true;
+    use std::f32::consts::{FRAC_PI_4, TAU};
+    let mut grid = [[None::<Color>; FAN_W]; FAN_H];
+    let base = frame as f32 * TAU / FAN_ROT_FRAMES as f32;
+    // Radii in row units; columns are stretched x2 to counter the ~2:1
+    // cell aspect so arms keep visually even lengths in every direction.
+    for arm in 0..8 {
+        let color = if arm % 2 == 0 { theme::TEXT } else { theme::ACCENT };
+        let theta = base + arm as f32 * FRAC_PI_4;
+        for r in [1.2f32, 2.4] {
+            let row = (2.0 - r * theta.cos()).round() as i32;
+            let col = (5.0 + 2.0 * r * theta.sin()).round() as i32;
+            if (0..FAN_H as i32).contains(&row) && (0..FAN_W as i32).contains(&col) {
+                grid[row as usize][col as usize] = Some(color);
+            }
         }
     }
-    let style = Style::default().fg(theme::ACCENT);
     let lines: Vec<Line> = grid
         .iter()
         .map(|row| {
             Line::from(
                 row.iter()
-                    .map(|&on| if on { Span::styled("✳", style) } else { Span::raw(" ") })
+                    .map(|cell| match cell {
+                        Some(color) => Span::styled("✳", Style::default().fg(*color)),
+                        None => Span::raw(" "),
+                    })
                     .collect::<Vec<_>>(),
             )
         })
@@ -187,14 +186,23 @@ mod tests {
     }
 
     #[test]
-    fn fan_arms_are_eight_distinct_two_cell_arms_in_bounds() {
-        assert_eq!(super::FAN_ARMS.len(), 8);
-        let mut seen = std::collections::HashSet::new();
-        for arm in super::FAN_ARMS {
-            for (r, c) in arm {
-                assert!(r < super::FAN_H && c < super::FAN_W, "cell ({r},{c}) out of bounds");
-                assert!(seen.insert((r, c)), "cell ({r},{c}) used by two arms");
-            }
+    fn star_fan_rotates_through_distinct_frames() {
+        let frames: Vec<String> = (0..super::FAN_ROT_FRAMES)
+            .map(|f| {
+                let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
+                let mut app = App::demo();
+                app.fan_frame = f;
+                t.draw(|fr| super::render(fr, fr.area(), &app)).unwrap();
+                t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+            })
+            .collect();
+        for (f, frame) in frames.iter().enumerate() {
+            let stars = frame.matches("✳").count();
+            assert!((8..=16).contains(&stars), "frame {f}: {stars} stars out of range");
+        }
+        for f in 0..frames.len() {
+            let next = (f + 1) % frames.len();
+            assert_ne!(frames[f], frames[next], "frames {f} and {next} identical — no rotation");
         }
     }
 
@@ -213,7 +221,7 @@ mod tests {
     #[test]
     fn full_tier_needs_seven_rows_for_unclipped_star_fan() {
         let full = draw_header(80, 7);
-        assert_eq!(full.matches("✳").count(), 14, "7 of 8 arms x 2 star cells at height 7");
+        assert!(full.contains("✳"), "star fan missing at height 7");
         for h in [5, 6] {
             let short = draw_header(80, h);
             assert!(!short.contains("✳"), "height {h} must fall back to compact");
@@ -221,29 +229,29 @@ mod tests {
     }
 
     #[test]
-    fn star_fan_gap_rotates_between_frames_in_brand_color() {
-        let stars = |frame: usize| -> Vec<usize> {
-            let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
-            let mut app = App::demo();
-            app.fan_frame = frame;
-            t.draw(|f| super::render(f, f.area(), &app)).unwrap();
-            let buf = t.backend().buffer().clone();
-            buf.content()
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.symbol() == "✳")
-                .inspect(|(_, c)| {
-                    assert_eq!(
-                        c.style().fg,
-                        Some(crate::ui::theme::ACCENT),
-                        "star cells must use the brand accent color"
-                    );
-                })
-                .map(|(i, _)| i)
-                .collect()
-        };
-        let (f0, f1) = (stars(0), stars(1));
-        assert_eq!(f0.len(), 14, "one arm must be hidden as the rotating gap");
-        assert_ne!(f0, f1, "the gap must move between consecutive frames");
+    fn star_fan_uses_only_brand_colors() {
+        let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let mut colors: Vec<_> = buf
+            .content()
+            .iter()
+            .filter(|c| c.symbol() == "✳")
+            .map(|c| c.style().fg.unwrap())
+            .collect();
+        colors.sort_by_key(|c| format!("{c:?}"));
+        colors.dedup();
+        assert_eq!(
+            colors.len(),
+            2,
+            "arms must alternate exactly two tones, got {colors:?}"
+        );
+        for c in colors {
+            assert!(
+                c == crate::ui::theme::ACCENT || c == crate::ui::theme::TEXT,
+                "off-brand color {c:?}"
+            );
+        }
     }
 }

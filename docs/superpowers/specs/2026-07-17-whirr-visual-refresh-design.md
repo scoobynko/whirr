@@ -51,12 +51,12 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Row 0 blank, rows 1–5 content, row 6 blank.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
-- Star fan (revised 2026-07-17 from a housed-blade design, per user's visual
-  reference; motion revised again same day — geometric, not color-based, and
-  brand color only): an 11×5 grid of ✳ cells forming 8 arms radiating from
-  an empty hub, all in ACCENT teal. One arm is always hidden; the gap
-  advances one position per frame (8 frames per revolution), so the wheel
-  reads as rotating:
+- Star fan (final form, modeled on the rotating asterisk on e2b.dev,
+  captured via Playwright): 8 arms of ✳ cells radiating from an empty hub
+  on an 11×5 grid, rasterized from angle math each frame so the whole star
+  rotates through intermediate angles — 24 frames per revolution (15°/tick).
+  Arms alternate the two brand tones (TEXT and ACCENT) and the tones travel
+  with the arms. Cardinal-aligned frame:
 
 ```
  ✳   ✳   ✳
@@ -66,9 +66,10 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
  ✳   ✳   ✳
 ```
 
-- `App::tick_fan` advances modulo 8 (was 4); `fan_interval` is halved so a
-  full revolution takes the same wall time as today — same perceived speed.
-  Load-scaling of the interval is unchanged.
+- `App::tick_fan` advances modulo 24; `fan_interval` stays 250ms idle →
+  50ms loaded, giving a 6s revolution at idle and 1.2s under full load.
+  Load-scaling of the interval is unchanged; the compact fan derives its
+  4-frame cycle as `(fan_frame / 2) % 4`.
 - `--no-fan` continues to hide the fan.
 
 **Compact tier** (given 3 rows): today's header verbatim — 3-row logo,

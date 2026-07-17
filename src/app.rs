@@ -229,7 +229,9 @@ impl App {
     }
 
     pub fn tick_fan(&mut self) {
-        self.fan_frame = (self.fan_frame + 1) % 8;
+        // 24 frames = one full revolution of the header star fan (15° per
+        // tick); the compact fan derives its 4-frame cycle from this.
+        self.fan_frame = (self.fan_frame + 1) % 24;
         self.dirty = true;
     }
 }
@@ -313,12 +315,12 @@ mod tests {
     }
 
     #[test]
-    fn fan_frame_wraps_at_eight() {
+    fn fan_frame_wraps_at_twenty_four() {
         let mut a = App::new(false);
-        for _ in 0..7 {
+        for _ in 0..23 {
             a.tick_fan();
         }
-        assert_eq!(a.fan_frame, 7);
+        assert_eq!(a.fan_frame, 23);
         a.tick_fan();
         assert_eq!(a.fan_frame, 0);
     }
