@@ -20,6 +20,7 @@ fn glyph(c: char) -> [&'static str; 4] {
         'W' => ["█   █", "█   █", "█ ▄ █", "▀▄▀▄▀"],
         '%' => ["█  ▄▀", "  ▄▀ ", " ▄▀  ", "▄▀  █"],
         'G' => ["▄▀▀▄", "█   ", "█ ▀█", "▀▄▄▀"],
+        '-' => ["   ", "▄▄▄", "   ", "   "],
         ' ' => [" ", " ", " ", " "],
         _ => ["?", "?", "?", "?"],
     }
@@ -35,6 +36,18 @@ pub fn big_text(s: &str) -> Vec<String> {
         }
     }
     rows
+}
+
+/// Render `precise` in the big font, falling back to `coarse` when the
+/// rendered rows would overflow `width` — hero values must never truncate
+/// mid-glyph (e.g. `100.0°C` is 31 cols but a card can be 28 wide).
+pub fn big_text_fit(precise: &str, coarse: &str, width: u16) -> Vec<String> {
+    let rows = big_text(precise);
+    if rows[0].chars().count() <= width as usize {
+        rows
+    } else {
+        big_text(coarse)
+    }
 }
 
 /// Whether a card's inner area has room for a 4-row hero layout: 4 hero
@@ -58,7 +71,7 @@ mod tests {
 
     #[test]
     fn all_required_glyphs_exist() {
-        for c in "0123456789.°CW%G ".chars() {
+        for c in "0123456789.°CW%G- ".chars() {
             let g = super::glyph(c);
             assert_eq!(g.len(), 4, "glyph {c:?} must have 4 rows");
             let w = g[0].chars().count();
@@ -73,5 +86,20 @@ mod tests {
         assert!(super::hero_fits(r(28, 9)));
         assert!(!super::hero_fits(r(28, 8)));
         assert!(!super::hero_fits(r(27, 9)));
+    }
+
+    #[test]
+    fn big_text_fit_uses_precise_when_it_fits() {
+        let rows = super::big_text_fit("41%", "41%", 28);
+        assert_eq!(rows, super::big_text("41%"));
+    }
+
+    #[test]
+    fn big_text_fit_falls_back_to_coarse_when_precise_overflows() {
+        // "100.0°C" renders wider than 28 cols; must fall back to "100°C".
+        let rows = super::big_text_fit("100.0°C", "100°C", 28);
+        assert!(rows[0].chars().count() <= 28);
+        assert_eq!(rows, super::big_text("100°C"));
+        assert_ne!(rows, super::big_text("100.0°C"));
     }
 }

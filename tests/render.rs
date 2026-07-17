@@ -106,3 +106,10 @@ fn compact_tier_keeps_old_visuals() {
     assert!(!c.contains("█ ▄ █"), "4-row logo must not render at 80x24");
     assert!(c.contains("88.0°C"), "compact temp readout missing");
 }
+
+#[test]
+fn tier_boundary_is_exactly_120x30() {
+    assert!(draw_at(120, 30).contains("╭─────╮"), "120x30 must be full tier");
+    assert!(!draw_at(119, 30).contains("╭─────╮"), "119x30 must be compact");
+    assert!(!draw_at(120, 29).contains("╭─────╮"), "120x29 must be compact");
+}

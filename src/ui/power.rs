@@ -28,7 +28,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             let total = p.cpu_w + p.gpu_w + p.ane_w;
             let text = format!("{total:.1} W");
             if hero {
-                let lines: Vec<Line> = font::big_text(&text)
+                let coarse = format!("{total:.0} W");
+                let lines: Vec<Line> = font::big_text_fit(&text, &coarse, inner.width)
                     .into_iter()
                     .map(|r| Line::styled(r, Style::default().fg(theme::ACCENT)))
                     .collect();

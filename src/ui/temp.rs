@@ -19,7 +19,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     if font::hero_fits(inner) {
         let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).split(inner);
-        let hero: Vec<Line> = font::big_text(&format!("{t:.1}°C"))
+        let precise = format!("{t:.1}°C");
+        let coarse = format!("{t:.0}°C");
+        let hero: Vec<Line> = font::big_text_fit(&precise, &coarse, inner.width)
             .into_iter()
             .map(|r| Line::styled(r, Style::default().fg(color)))
             .collect();
@@ -103,5 +105,32 @@ mod tests {
         assert_eq!(ratio(20.0), 0.0);
         assert_eq!(ratio(105.0), 1.0);
         assert!((ratio(67.5) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn hero_falls_back_to_coarse_when_precise_would_overflow() {
+        // 30x12 -> inner 28x10, full hero tier engaged (width >= 28, height >= 9).
+        // "100.5°C" formatted to 1 decimal is 31 glyph-columns wide, wider than
+        // the 28-wide inner area, so it must fall back to "100°C" (0 decimals)
+        // instead of truncating mid-glyph. The precise-width row never fits
+        // inside 28 cols, so its top row is not a substring of the buffer;
+        // the coarse row (23 cols) does fit and must appear intact.
+        let mut t = Terminal::new(TestBackend::new(30, 12)).unwrap();
+        let mut app = App::demo();
+        app.medium.as_mut().unwrap().temp_c = Some(100.5);
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let content: String =
+            t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(!content.contains('?'), "hero glyph fallback '?' should never render");
+        let precise_row0 = super::font::big_text("100.5°C").remove(0);
+        let coarse_row0 = super::font::big_text("100°C").remove(0);
+        assert!(
+            !content.contains(precise_row0.as_str()),
+            "full-precision hero row rendered intact — should have overflowed the 28-wide card"
+        );
+        assert!(
+            content.contains(coarse_row0.as_str()),
+            "coarse fallback row missing — hero should fall back to \"100°C\" when precise overflows"
+        );
     }
 }
