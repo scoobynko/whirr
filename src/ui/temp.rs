@@ -3,7 +3,7 @@ use ratatui::symbols::Marker;
 use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
 
 use crate::app::App;
-use super::theme;
+use super::{font, theme};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let block = theme::panel_block("Temp", false);
@@ -17,28 +17,25 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
     let color = theme::temp_color(t);
 
-    let cols = Layout::horizontal([Constraint::Length(3), Constraint::Min(4)]).split(inner);
-    render_thermometer(f, cols[0], t, color);
+    if font::hero_fits(inner) {
+        let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).split(inner);
+        let hero: Vec<Line> = font::big_text(&format!("{t:.1}°C"))
+            .into_iter()
+            .map(|r| Line::styled(r, Style::default().fg(color)))
+            .collect();
+        f.render_widget(Paragraph::new(hero), rows[0]);
+        render_chart(f, rows[1], app, color);
+    } else {
+        let cols = Layout::horizontal([Constraint::Length(3), Constraint::Min(4)]).split(inner);
+        render_thermometer(f, cols[0], t, color);
 
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(cols[1]);
-    f.render_widget(
-        Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
-        rows[0],
-    );
-    let points: Vec<(f64, f64)> = app
-        .temp_hist
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i as f64, f64::from(v)))
-        .collect();
-    let chart = Chart::new(vec![Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color))
-        .data(&points)])
-    .x_axis(Axis::default().bounds([0.0, 59.0]))
-    .y_axis(Axis::default().bounds([30.0, 105.0]));
-    f.render_widget(chart, rows[1]);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(cols[1]);
+        f.render_widget(
+            Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
+            rows[0],
+        );
+        render_chart(f, rows[1], app, color);
+    }
 }
 
 fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
@@ -58,8 +55,48 @@ fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
+fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
+    let points: Vec<(f64, f64)> = app
+        .temp_hist
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (i as f64, f64::from(v)))
+        .collect();
+    let chart = Chart::new(vec![Dataset::default()
+        .marker(Marker::Braille)
+        .graph_type(GraphType::Line)
+        .style(Style::default().fg(color))
+        .data(&points)])
+    .x_axis(Axis::default().bounds([0.0, 59.0]))
+    .y_axis(Axis::default().bounds([30.0, 105.0]));
+    f.render_widget(chart, area);
+}
+
 #[cfg(test)]
 mod tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+
+    fn draw(w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn hero_drops_thermometer_when_room() {
+        // demo temp = 88.0 → "88.0°C"
+        let full = draw(40, 12);
+        assert!(full.contains("▄▀▀▄"), "4-row '8' glyph missing");
+        assert!(!full.contains("▐"), "thermometer should be gone in hero tier");
+        let compact = draw(40, 10);
+        assert!(compact.contains("▐"), "thermometer missing in compact tier");
+        assert!(compact.contains("88.0°C"));
+    }
+
     #[test]
     fn fill_ratio_clamps() {
         let ratio = |t: f32| ((t - 30.0) / 75.0).clamp(0.0, 1.0);
