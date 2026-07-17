@@ -72,7 +72,7 @@ impl App {
     pub fn demo() -> Self {
         let mut app = Self::new(false);
         app.ingest(Snapshot::Fast(FastSnap {
-            per_core: vec![12.0, 45.0, 78.0, 30.0, 25.0, 55.0, 42.0, 38.0, 65.0, 22.0],
+            per_core: vec![12.0, 45.0, 78.0, 30.0],
             total_cpu: 41.0,
             processes: vec![
                 ProcInfo { pid: 101, name: "kernel_task".into(), cpu: 12.5, mem: 512_000 },

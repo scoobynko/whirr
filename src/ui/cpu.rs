@@ -106,7 +106,10 @@ mod tests {
 
     fn draw(w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        let app = App::demo();
+        let mut app = App::demo();
+        // Pin the E/P boundary so the strip's labels don't depend on the
+        // host machine's real core counts.
+        app.statics.e_cores = 2;
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
