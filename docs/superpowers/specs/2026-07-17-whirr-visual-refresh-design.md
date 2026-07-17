@@ -105,8 +105,9 @@ Details:
   (CPU: numbered heatmap + chart; Temp: thermometer + line + chart;
   Power: 3-row… now 4-row font doesn't fit, so compact Power falls back to a
   single bold text line like Temp's compact readout; Memory: today's layout).
-- Header self-decides the same way: area height ≥ 5 → housed fan + padding,
-  else compact.
+- Header self-decides the same way: area height ≥ 7 → housed fan + padding
+  (the 1/5/1 padded split needs all 7 rows; shorter areas would clip the fan
+  housing), else compact.
 
 ## 5. Testing
 
