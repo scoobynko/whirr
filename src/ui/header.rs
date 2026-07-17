@@ -112,9 +112,12 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
     use std::f32::consts::{FRAC_PI_4, TAU};
-    let mut grid = [[false; FAN_W]; FAN_H];
+    let mut grid = [[None::<Color>; FAN_W]; FAN_H];
     let base = frame as f32 * TAU / FAN_ROT_FRAMES as f32;
     for arm in 0..8 {
+        // Arms alternate the two brand tones (like e2b's black/orange);
+        // the tone travels with the arm as it rotates.
+        let color = if arm % 2 == 0 { theme::TEXT } else { theme::ACCENT };
         let theta = base + arm as f32 * FRAC_PI_4;
         let vertical_ish = theta.sin().abs() < 0.5;
         for r in [1.4f32, 2.3, 3.2] {
@@ -126,18 +129,20 @@ fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
             let span = if vertical_ish { 2 } else { 1 };
             for c in col..col + span {
                 if (0..FAN_H as i32).contains(&row) && (0..FAN_W as i32).contains(&c) {
-                    grid[row as usize][c as usize] = true;
+                    grid[row as usize][c as usize] = Some(color);
                 }
             }
         }
     }
-    let style = Style::default().fg(theme::ACCENT);
     let lines: Vec<Line> = grid
         .iter()
         .map(|row| {
             Line::from(
                 row.iter()
-                    .map(|&on| if on { Span::styled("✳", style) } else { Span::raw(" ") })
+                    .map(|cell| match cell {
+                        Some(color) => Span::styled("✳", Style::default().fg(*color)),
+                        None => Span::raw(" "),
+                    })
                     .collect::<Vec<_>>(),
             )
         })
@@ -231,16 +236,23 @@ mod tests {
     }
 
     #[test]
-    fn star_fan_uses_only_brand_accent() {
+    fn star_fan_alternates_the_two_brand_tones() {
         let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
         let app = App::demo();
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let buf = t.backend().buffer().clone();
-        for c in buf.content().iter().filter(|c| c.symbol() == "✳") {
-            assert_eq!(
-                c.style().fg,
-                Some(crate::ui::theme::ACCENT),
-                "star cells must use the brand accent color"
+        let colors: Vec<_> = buf
+            .content()
+            .iter()
+            .filter(|c| c.symbol() == "✳")
+            .map(|c| c.style().fg.unwrap())
+            .collect();
+        assert!(colors.contains(&crate::ui::theme::ACCENT), "accent arms missing");
+        assert!(colors.contains(&crate::ui::theme::TEXT), "white arms missing");
+        for c in colors {
+            assert!(
+                c == crate::ui::theme::ACCENT || c == crate::ui::theme::TEXT,
+                "off-brand color {c:?}"
             );
         }
     }

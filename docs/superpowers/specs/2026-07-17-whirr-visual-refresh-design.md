@@ -56,8 +56,10 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
   read as spinning; star glyphs carry no per-cell direction so only real
   cell displacement over a fine-enough grid works): an e2b.dev-style
   asterisk on a 17×7 grid, 8 blades × 3 star cells, rasterized from angle
-  math each frame — 15°/tick, 24 ticks per revolution, all ACCENT teal.
-  Near-vertical blades draw ✳✳ pairs to counter the ~2:1 cell aspect. The
+  math each frame — 15°/tick, 24 ticks per revolution. Arms alternate the
+  two brand tones (TEXT white / ACCENT teal), tones traveling with the
+  arms. Near-vertical blades draw ✳✳ pairs to counter the ~2:1 cell
+  aspect. The
   header band grows to 7 rows (full header 9 incl. padding); logo and
   facts center against the fan. Cardinal frame:
 
@@ -71,9 +73,12 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
       ✳✳
 ```
 
-- `App::tick_fan` advances modulo 24. `fan_interval` stays 250ms idle →
-  50ms loaded (6s/rev idle, 1.2s loaded); load-scaling unchanged; the
-  compact fan derives its 4-frame cycle as `(fan_frame / 2) % 4`.
+- `App::tick_fan` advances modulo 24. `fan_interval` simulates a real Mac
+  fan curve: driven by `temp_c` (lazy ≤55°C at 600ms/tick ≈ 14s/rev,
+  ramping to 80ms/tick ≈ 2s/rev at ≥95°C), falling back to CPU load when
+  no temp sensor exists. Reading true SMC fan RPM is a possible future
+  enhancement. The compact fan derives its 4-frame cycle as
+  `(fan_frame / 2) % 4`.
 - `ui/mod.rs` full tier: header `Length(9)` (was 7), gauges `Length(12)`.
 - `--no-fan` continues to hide the fan.
 

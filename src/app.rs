@@ -222,10 +222,16 @@ impl App {
     }
 
     pub fn fan_interval(&self) -> Duration {
-        let load = self.fast.as_ref().map_or(0.0, |f| f.total_cpu / 100.0);
-        // Half the 4-frame-era interval: 8 frames per revolution at twice
-        // the tick rate keeps the perceived rotation speed identical.
-        Duration::from_millis((250.0 - 200.0 * f64::from(load)) as u64)
+        // Simulated Mac fan curve: lazy below ~55°C, ramping steeply toward
+        // 95°C — temperature is what actually drives real fans, so the
+        // header fan mirrors it. Falls back to CPU load when the machine
+        // has no usable temp sensor. 600ms/tick idle (~14s per revolution)
+        // down to 80ms/tick when hot (~2s per revolution).
+        let heat = match self.medium.as_ref().and_then(|m| m.temp_c) {
+            Some(t) => ((t - 55.0) / 40.0).clamp(0.0, 1.0),
+            None => self.fast.as_ref().map_or(0.0, |f| (f.total_cpu / 100.0).clamp(0.0, 1.0)),
+        };
+        Duration::from_millis((600.0 - 520.0 * f64::from(heat)) as u64)
     }
 
     pub fn tick_fan(&mut self) {
@@ -304,15 +310,35 @@ mod tests {
     }
 
     #[test]
-    fn fan_speed_scales_with_load() {
+    fn fan_speed_follows_simulated_thermal_curve() {
         let mut a = App::new(false);
-        let idle = a.fan_interval();
+        // No data at all: lazy idle spin.
+        assert_eq!(a.fan_interval().as_millis(), 600);
+
+        // Temperature drives the curve when a sensor exists.
+        let snap = |t: f32| MediumSnap {
+            temp_c: Some(t),
+            power: None,
+            battery: None,
+            memory: None,
+            uptime_secs: 0,
+        };
+        a.ingest(Snapshot::Medium(snap(55.0)));
+        assert_eq!(a.fan_interval().as_millis(), 600, "cool chip keeps idle speed");
+        a.ingest(Snapshot::Medium(snap(95.0)));
+        assert_eq!(a.fan_interval().as_millis(), 80, "hot chip spins fastest");
+        a.ingest(Snapshot::Medium(snap(75.0)));
+        let mid = a.fan_interval().as_millis();
+        assert!(mid > 80 && mid < 600, "mid temp ramps between: {mid}");
+    }
+
+    #[test]
+    fn fan_speed_falls_back_to_load_without_temp_sensor() {
+        let mut a = App::new(false);
         let mut f = demo_fast();
         f.total_cpu = 100.0;
         a.ingest(Snapshot::Fast(f));
-        assert!(a.fan_interval() < idle);
-        assert_eq!(idle.as_millis(), 250);
-        assert_eq!(a.fan_interval().as_millis(), 50);
+        assert_eq!(a.fan_interval().as_millis(), 80, "full load = fastest without sensor");
     }
 
     #[test]
