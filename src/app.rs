@@ -223,11 +223,13 @@ impl App {
 
     pub fn fan_interval(&self) -> Duration {
         let load = self.fast.as_ref().map_or(0.0, |f| f.total_cpu / 100.0);
-        Duration::from_millis((500.0 - 400.0 * f64::from(load)) as u64)
+        // Half the 4-frame-era interval: 8 frames per revolution at twice
+        // the tick rate keeps the perceived rotation speed identical.
+        Duration::from_millis((250.0 - 200.0 * f64::from(load)) as u64)
     }
 
     pub fn tick_fan(&mut self) {
-        self.fan_frame = (self.fan_frame + 1) % 4;
+        self.fan_frame = (self.fan_frame + 1) % 8;
         self.dirty = true;
     }
 }
@@ -302,11 +304,23 @@ mod tests {
     fn fan_speed_scales_with_load() {
         let mut a = App::new(false);
         let idle = a.fan_interval();
-        let mut f = app_with_procs().fast.unwrap();
+        let mut f = demo_fast();
         f.total_cpu = 100.0;
         a.ingest(Snapshot::Fast(f));
         assert!(a.fan_interval() < idle);
-        assert_eq!(a.fan_interval().as_millis(), 100);
+        assert_eq!(idle.as_millis(), 250);
+        assert_eq!(a.fan_interval().as_millis(), 50);
+    }
+
+    #[test]
+    fn fan_frame_wraps_at_eight() {
+        let mut a = App::new(false);
+        for _ in 0..7 {
+            a.tick_fan();
+        }
+        assert_eq!(a.fan_frame, 7);
+        a.tick_fan();
+        assert_eq!(a.fan_frame, 0);
     }
 
     #[test]
