@@ -51,25 +51,23 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Row 0 blank, rows 1–5 content, row 6 blank.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
-- Star fan (final form, modeled on the rotating asterisk on e2b.dev,
-  captured via Playwright): 8 arms of ✳ cells radiating from an empty hub
-  on an 11×5 grid, rasterized from angle math each frame so the whole star
-  rotates through intermediate angles — 24 frames per revolution (15°/tick).
-  Arms alternate the two brand tones (TEXT and ACCENT) and the tones travel
-  with the arms. Cardinal-aligned frame:
+- Star fan (final form — windmill flip, chosen by user after trying color
+  flip, rotating gap, and continuous rotation): four 2-cell ✳ arms on an
+  11×5 grid jumping between the + and × positions each frame, all in
+  ACCENT teal. A 4-arm wheel turning 45° per step shows exactly these two
+  states, so the flip reads as spinning. The + state:
 
 ```
- ✳   ✳   ✳
-   ✳ ✳ ✳
+     ✳
+     ✳
  ✳ ✳   ✳ ✳
-   ✳ ✳ ✳
- ✳   ✳   ✳
+     ✳
+     ✳
 ```
 
-- `App::tick_fan` advances modulo 24; `fan_interval` stays 250ms idle →
-  50ms loaded, giving a 6s revolution at idle and 1.2s under full load.
-  Load-scaling of the interval is unchanged; the compact fan derives its
-  4-frame cycle as `(fan_frame / 2) % 4`.
+- `App::tick_fan` advances modulo 8; the windmill flips on frame parity.
+  `fan_interval` stays 250ms idle → 50ms loaded; load-scaling unchanged;
+  the compact fan derives its 4-frame cycle as `(fan_frame / 2) % 4`.
 - `--no-fan` continues to hide the fan.
 
 **Compact tier** (given 3 rows): today's header verbatim — 3-row logo,

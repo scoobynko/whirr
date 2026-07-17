@@ -29,15 +29,26 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
     [" ╲   ", "  ✻  ", "   ╲ "],
 ];
 
-// Full-tier star fan: 8 arms of ✳ cells radiating from an empty hub on a
-// FAN_H x FAN_W grid, rasterized fresh each frame so the whole star
-// genuinely rotates through intermediate angles (like the e2b.dev
-// asterisk) instead of snapping between the 8 cardinal positions. One
-// revolution takes FAN_ROT_FRAMES frames (15° per tick); arms alternate
-// the two brand tones, and the tones travel with the arms.
+// Full-tier star fan: a windmill of four 2-cell ✳ arms on a FAN_H x FAN_W
+// grid, jumping between the + and × positions each frame. A 4-arm wheel
+// turning 45° per step shows exactly these two states, so the flip reads
+// as spinning without any color animation. Single brand color.
 const FAN_H: usize = 5;
 const FAN_W: usize = 11;
-const FAN_ROT_FRAMES: usize = 24;
+const WINDMILL: [[[(usize, usize); 2]; 4]; 2] = [
+    [
+        [(1, 5), (0, 5)], // N
+        [(2, 7), (2, 9)], // E
+        [(3, 5), (4, 5)], // S
+        [(2, 3), (2, 1)], // W
+    ],
+    [
+        [(1, 7), (0, 9)], // NE
+        [(3, 7), (4, 9)], // SE
+        [(3, 3), (4, 1)], // SW
+        [(1, 3), (0, 1)], // NW
+    ],
+];
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Full tier needs 7 rows: 1 (top pad) + 5 (band) + 1 (bottom pad).
@@ -110,31 +121,19 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
-    use std::f32::consts::{FRAC_PI_4, TAU};
-    let mut grid = [[None::<Color>; FAN_W]; FAN_H];
-    let base = frame as f32 * TAU / FAN_ROT_FRAMES as f32;
-    // Radii in row units; columns are stretched x2 to counter the ~2:1
-    // cell aspect so arms keep visually even lengths in every direction.
-    for arm in 0..8 {
-        let color = if arm % 2 == 0 { theme::TEXT } else { theme::ACCENT };
-        let theta = base + arm as f32 * FRAC_PI_4;
-        for r in [1.2f32, 2.4] {
-            let row = (2.0 - r * theta.cos()).round() as i32;
-            let col = (5.0 + 2.0 * r * theta.sin()).round() as i32;
-            if (0..FAN_H as i32).contains(&row) && (0..FAN_W as i32).contains(&col) {
-                grid[row as usize][col as usize] = Some(color);
-            }
+    let mut grid = [[false; FAN_W]; FAN_H];
+    for arm in WINDMILL[frame % 2] {
+        for (r, c) in arm {
+            grid[r][c] = true;
         }
     }
+    let style = Style::default().fg(theme::ACCENT);
     let lines: Vec<Line> = grid
         .iter()
         .map(|row| {
             Line::from(
                 row.iter()
-                    .map(|cell| match cell {
-                        Some(color) => Span::styled("✳", Style::default().fg(*color)),
-                        None => Span::raw(" "),
-                    })
+                    .map(|&on| if on { Span::styled("✳", style) } else { Span::raw(" ") })
                     .collect::<Vec<_>>(),
             )
         })
@@ -186,24 +185,19 @@ mod tests {
     }
 
     #[test]
-    fn star_fan_rotates_through_distinct_frames() {
-        let frames: Vec<String> = (0..super::FAN_ROT_FRAMES)
-            .map(|f| {
-                let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
-                let mut app = App::demo();
-                app.fan_frame = f;
-                t.draw(|fr| super::render(fr, fr.area(), &app)).unwrap();
-                t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
-            })
-            .collect();
-        for (f, frame) in frames.iter().enumerate() {
-            let stars = frame.matches("✳").count();
-            assert!((8..=16).contains(&stars), "frame {f}: {stars} stars out of range");
-        }
-        for f in 0..frames.len() {
-            let next = (f + 1) % frames.len();
-            assert_ne!(frames[f], frames[next], "frames {f} and {next} identical — no rotation");
-        }
+    fn windmill_flips_between_plus_and_cross() {
+        let draw_frame = |f: usize| -> String {
+            let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
+            let mut app = App::demo();
+            app.fan_frame = f;
+            t.draw(|fr| super::render(fr, fr.area(), &app)).unwrap();
+            t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+        };
+        let (plus, cross, plus_again) = (draw_frame(0), draw_frame(1), draw_frame(2));
+        assert_eq!(plus.matches("✳").count(), 8, "4 arms x 2 cells in + state");
+        assert_eq!(cross.matches("✳").count(), 8, "4 arms x 2 cells in x state");
+        assert_ne!(plus, cross, "the windmill must flip between frames");
+        assert_eq!(plus, plus_again, "the flip must have period 2");
     }
 
     use ratatui::backend::TestBackend;
@@ -229,28 +223,16 @@ mod tests {
     }
 
     #[test]
-    fn star_fan_uses_only_brand_colors() {
+    fn star_fan_uses_only_brand_accent() {
         let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
         let app = App::demo();
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let buf = t.backend().buffer().clone();
-        let mut colors: Vec<_> = buf
-            .content()
-            .iter()
-            .filter(|c| c.symbol() == "✳")
-            .map(|c| c.style().fg.unwrap())
-            .collect();
-        colors.sort_by_key(|c| format!("{c:?}"));
-        colors.dedup();
-        assert_eq!(
-            colors.len(),
-            2,
-            "arms must alternate exactly two tones, got {colors:?}"
-        );
-        for c in colors {
-            assert!(
-                c == crate::ui::theme::ACCENT || c == crate::ui::theme::TEXT,
-                "off-brand color {c:?}"
+        for c in buf.content().iter().filter(|c| c.symbol() == "✳") {
+            assert_eq!(
+                c.style().fg,
+                Some(crate::ui::theme::ACCENT),
+                "star cells must use the brand accent color"
             );
         }
     }
