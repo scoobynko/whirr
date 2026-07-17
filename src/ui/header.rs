@@ -45,8 +45,8 @@ const WINDMILL: [[&str; 4]; 2] = [
     ],
     [
         "✳✳      ✳✳",
-        "  ✳✳  ✳✳  ",
-        "  ✳✳  ✳✳  ",
+        " ✳✳ ✳✳ ✳✳ ",
+        " ✳✳ ✳✳ ✳✳ ",
         "✳✳      ✳✳",
     ],
 ];
@@ -175,11 +175,13 @@ mod tests {
 
     #[test]
     fn windmill_states_are_four_rows_matching_the_font() {
-        for state in super::WINDMILL {
+        // Both states carry a center hub; the x state's blades plus hub
+        // total 20 cells, the + state's 16.
+        for (state, expected_stars) in super::WINDMILL.iter().zip([16, 20]) {
             assert_eq!(state.len(), 4, "fan must match the 4-row font height");
             assert!(state.iter().all(|r| r.chars().count() == 10));
             let stars: usize = state.iter().map(|r| r.matches("✳").count()).sum();
-            assert_eq!(stars, 16, "double-asterisk blades, 16 cells per state");
+            assert_eq!(stars, expected_stars, "double-asterisk blades with hub");
         }
     }
 
