@@ -37,8 +37,8 @@ pub fn big_text(s: &str) -> Vec<String> {
     rows
 }
 
-/// Whether a card's inner area has room for a 4-row hero layout: 4 hero rows
-/// + at least a strip/chart below (height 9) and the widest hero string
+/// Whether a card's inner area has room for a 4-row hero layout: 4 hero
+/// rows plus a strip/chart below (height 9), and the widest hero string
 /// (`88.8°C` ≈ 27 cols) plus margin.
 pub fn hero_fits(inner: Rect) -> bool {
     inner.height >= 9 && inner.width >= 28
