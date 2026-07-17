@@ -51,19 +51,22 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Row 0 blank, rows 1–5 content, row 6 blank.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
-- Housed fan: fixed round housing, blades rotate through **8 frames**:
+- Star fan (revised 2026-07-17 from a housed-blade design, per user's visual
+  reference): an 11×5 grid of ✳ cells forming 8 static arms radiating from
+  an empty hub. Arms alternate white (TEXT) and amber; each frame the colors
+  flip — visually identical to an 8-arm wheel rotating 45° per tick:
 
 ```
-╭─────╮
-│ ╲ ╱ │
-│  ✺  │
-│ ╱ ╲ │
-╰─────╯
+ ✳   ✳   ✳
+   ✳ ✳ ✳
+ ✳ ✳   ✳ ✳
+   ✳ ✳ ✳
+ ✳   ✳   ✳
 ```
 
 - `App::tick_fan` advances modulo 8 (was 4); `fan_interval` is halved so a
-  full revolution takes the same wall time as today — same perceived speed,
-  twice the smoothness. Load-scaling of the interval is unchanged.
+  full revolution takes the same wall time as today — same perceived speed.
+  Load-scaling of the interval is unchanged.
 - `--no-fan` continues to hide the fan.
 
 **Compact tier** (given 3 rows): today's header verbatim — 3-row logo,

@@ -29,17 +29,23 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
     [" ╲   ", "  ✻  ", "   ╲ "],
 ];
 
-// Full-tier blades: 8 frames — the four 2-arm positions plus blur frames
-// between them, so rotation reads smooth inside the fixed housing.
-const FAN_BLADES: [[&str; 3]; 8] = [
-    ["  │  ", "  ✺  ", "  │  "],
-    ["  │╱ ", "  ✺  ", " ╱│  "],
-    ["   ╱ ", "  ✺  ", " ╱   "],
-    ["   ╱ ", "──✺──", " ╱   "],
-    ["     ", "──✺──", "     "],
-    [" ╲   ", "──✺──", "   ╲ "],
-    [" ╲   ", "  ✺  ", "   ╲ "],
-    [" ╲│  ", "  ✺  ", "  │╲ "],
+// Full-tier star fan: 8 arms of ✳ cells radiating from an empty hub,
+// clockwise from N, each arm two (row, col) cells on a FAN_H x FAN_W grid.
+// Odd columns keep diagonal/horizontal arms visually 45°/90° despite the
+// ~2:1 cell aspect. Animation never moves the arms — colors alternate
+// white/amber and flip each frame, which is exactly what an 8-arm wheel
+// looks like rotating 45° per tick.
+const FAN_H: usize = 5;
+const FAN_W: usize = 11;
+const FAN_ARMS: [[(usize, usize); 2]; 8] = [
+    [(1, 5), (0, 5)], // N
+    [(1, 7), (0, 9)], // NE
+    [(2, 7), (2, 9)], // E
+    [(3, 7), (4, 9)], // SE
+    [(3, 5), (4, 5)], // S
+    [(3, 3), (4, 1)], // SW
+    [(2, 3), (2, 1)], // W
+    [(1, 3), (0, 1)], // NW
 ];
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
@@ -60,7 +66,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     let band = bands[1];
     let cols = Layout::horizontal([
         Constraint::Length(26), // logo
-        Constraint::Length(11), // housed fan
+        Constraint::Length(11), // star fan
         Constraint::Min(0),     // ambient facts
     ])
     .split(band);
@@ -72,7 +78,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(logo_lines), cols[0]);
 
     if !app.no_fan {
-        render_housed_fan(f, cols[1], app.fan_frame % 8);
+        render_star_fan(f, cols[1], app.fan_frame);
     }
 
     // Facts sit one row down so their block centers against the fan hub.
@@ -112,19 +118,27 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(facts_paragraph(app), cols[2]);
 }
 
-fn render_housed_fan(f: &mut Frame, area: Rect, frame: usize) {
-    let dim = Style::default().fg(theme::DIM);
-    let txt = Style::default().fg(theme::TEXT);
-    let blades = FAN_BLADES[frame];
-    let mut lines = vec![Line::styled(" ╭─────╮", dim)];
-    for row in blades {
-        lines.push(Line::from(vec![
-            Span::styled(" │", dim),
-            Span::styled(row, txt),
-            Span::styled("│", dim),
-        ]));
+fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
+    let mut grid = [[None::<Color>; FAN_W]; FAN_H];
+    for (i, arm) in FAN_ARMS.iter().enumerate() {
+        let color = if (i + frame) % 2 == 1 { theme::AMBER } else { theme::TEXT };
+        for &(r, c) in arm {
+            grid[r][c] = Some(color);
+        }
     }
-    lines.push(Line::styled(" ╰─────╯", dim));
+    let lines: Vec<Line> = grid
+        .iter()
+        .map(|row| {
+            Line::from(
+                row.iter()
+                    .map(|cell| match cell {
+                        Some(color) => Span::styled("✳", Style::default().fg(*color)),
+                        None => Span::raw(" "),
+                    })
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
     f.render_widget(Paragraph::new(lines), area);
 }
 
@@ -172,11 +186,14 @@ mod tests {
     }
 
     #[test]
-    fn housed_fan_blades_are_eight_uniform_frames() {
-        assert_eq!(super::FAN_BLADES.len(), 8);
-        for frame in super::FAN_BLADES {
-            assert_eq!(frame.len(), 3);
-            assert!(frame.iter().all(|r| r.chars().count() == 5), "{frame:?}");
+    fn fan_arms_are_eight_distinct_two_cell_arms_in_bounds() {
+        assert_eq!(super::FAN_ARMS.len(), 8);
+        let mut seen = std::collections::HashSet::new();
+        for arm in super::FAN_ARMS {
+            for (r, c) in arm {
+                assert!(r < super::FAN_H && c < super::FAN_W, "cell ({r},{c}) out of bounds");
+                assert!(seen.insert((r, c)), "cell ({r},{c}) used by two arms");
+            }
         }
     }
 
@@ -193,13 +210,33 @@ mod tests {
     }
 
     #[test]
-    fn full_tier_needs_seven_rows_for_unclipped_housing() {
+    fn full_tier_needs_seven_rows_for_unclipped_star_fan() {
         let full = draw_header(80, 7);
-        assert!(full.contains("╭─────╮"), "housing top missing at height 7");
-        assert!(full.contains("╰─────╯"), "housing bottom clipped at height 7");
+        assert_eq!(full.matches("✳").count(), 16, "8 arms x 2 star cells at height 7");
         for h in [5, 6] {
             let short = draw_header(80, h);
-            assert!(!short.contains("╭─────╮"), "height {h} must fall back to compact");
+            assert!(!short.contains("✳"), "height {h} must fall back to compact");
         }
+    }
+
+    #[test]
+    fn star_fan_alternates_arm_colors_between_frames() {
+        let colors = |frame: usize| -> Vec<ratatui::style::Color> {
+            let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
+            let mut app = App::demo();
+            app.fan_frame = frame;
+            t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+            t.backend()
+                .buffer()
+                .content()
+                .iter()
+                .filter(|c| c.symbol() == "✳")
+                .map(|c| c.style().fg.unwrap())
+                .collect()
+        };
+        let (f0, f1) = (colors(0), colors(1));
+        assert!(f0.contains(&crate::ui::theme::AMBER), "amber arms missing");
+        assert!(f0.contains(&crate::ui::theme::TEXT), "white arms missing");
+        assert_ne!(f0, f1, "arm colors must flip between consecutive frames");
     }
 }
