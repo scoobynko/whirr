@@ -94,11 +94,14 @@ Details:
 
 ## 4. Responsive behavior
 
-- `ui/mod.rs`: `full = area.height >= 30`. Header `Length(full ? 7 : 3)`,
-  gauges `Length(full ? 12 : 10)`. Width-based drops (`show_power`,
-  `show_temp`, `show_network`, `show_ports`) untouched.
-- Each card self-decides from its own inner height — no tier flag threading:
-  inner height ≥ 9 → hero layout; below → its current compact layout
+- `ui/mod.rs`: `full = area.height >= 30 && area.width >= 120`. Header
+  `Length(full ? 7 : 3)`, gauges `Length(full ? 12 : 10)`. The width gate
+  exists because hero strings need ~27 columns (`88.8°C`) and cards only
+  reach that at ≥120-column terminals (4 cards × 30). Width-based drops
+  (`show_power`, `show_temp`, `show_network`, `show_ports`) untouched.
+- Each card self-decides from its own inner size — no tier flag threading:
+  inner height ≥ 9 AND inner width ≥ 28 → hero layout; below → its current
+  compact layout
   (CPU: numbered heatmap + chart; Temp: thermometer + line + chart;
   Power: 3-row… now 4-row font doesn't fit, so compact Power falls back to a
   single bold text line like Temp's compact readout; Memory: today's layout).
