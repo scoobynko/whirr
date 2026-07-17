@@ -5,15 +5,23 @@ use super::theme;
 use crate::app::App;
 use crate::units::fmt_duration;
 
-// "whirr" wordmark: W H I R R, each letter a fixed-width glyph so all three
-// rows line up (unlike a naive hand-drawn version where glyph widths drift
-// row to row).
+// Compact-tier wordmark (3 rows) — kept verbatim for small terminals.
 const LOGO: [&str; 3] = [
     "█ █ █ █ █ █ █▀█ █▀█",
     "█ █ █ █▀█ █ █▀▄ █▀▄",
     "▀▄▀▄▀ █ █ █ █ █ █ █",
 ];
 
+// Full-tier wordmark: W H I R R in the same 4-row tall-rounded style as
+// the hero font (ui/font.rs).
+const LOGO4: [&str; 4] = [
+    "█   █ █  █ ▄█▄ █▀▀▄ █▀▀▄",
+    "█   █ █▄▄█  █  █▄▄▀ █▄▄▀",
+    "█ ▄ █ █  █  █  █ ▀▄ █ ▀▄",
+    "▀▄▀▄▀ █  █ ▄█▄ █  █ █  █",
+];
+
+// Compact-tier 2-arm fan (4 frames) — kept verbatim.
 const FAN_FRAMES: [[&str; 3]; 4] = [
     ["  │  ", "  ✻  ", "  │  "],
     ["   ╱ ", "  ✻  ", " ╱   "],
@@ -21,7 +29,60 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
     [" ╲   ", "  ✻  ", "   ╲ "],
 ];
 
+// Full-tier blades: 8 frames — the four 2-arm positions plus blur frames
+// between them, so rotation reads smooth inside the fixed housing.
+const FAN_BLADES: [[&str; 3]; 8] = [
+    ["  │  ", "  ✺  ", "  │  "],
+    ["  │╱ ", "  ✺  ", " ╱│  "],
+    ["   ╱ ", "  ✺  ", " ╱   "],
+    ["   ╱ ", "──✺──", " ╱   "],
+    ["     ", "──✺──", "     "],
+    [" ╲   ", "──✺──", "   ╲ "],
+    [" ╲   ", "  ✺  ", "   ╲ "],
+    [" ╲│  ", "  ✺  ", "  │╲ "],
+];
+
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
+    if area.height >= 5 {
+        render_full(f, area, app);
+    } else {
+        render_compact(f, area, app);
+    }
+}
+
+fn render_full(f: &mut Frame, area: Rect, app: &App) {
+    // Breathing room: one blank row above and below the 5-row content band.
+    let bands =
+        Layout::vertical([Constraint::Length(1), Constraint::Length(5), Constraint::Min(0)])
+            .split(area);
+    let band = bands[1];
+    let cols = Layout::horizontal([
+        Constraint::Length(26), // logo
+        Constraint::Length(11), // housed fan
+        Constraint::Min(0),     // ambient facts
+    ])
+    .split(band);
+
+    let logo_lines: Vec<Line> = LOGO4
+        .iter()
+        .map(|l| Line::styled(*l, Style::default().fg(theme::ACCENT).bold()))
+        .collect();
+    f.render_widget(Paragraph::new(logo_lines), cols[0]);
+
+    if !app.no_fan {
+        render_housed_fan(f, cols[1], app.fan_frame % 8);
+    }
+
+    // Facts sit one row down so their block centers against the fan hub.
+    let facts_area = Rect {
+        y: band.y + 1,
+        height: band.height.saturating_sub(1).min(3),
+        ..cols[2]
+    };
+    f.render_widget(facts_paragraph(app), facts_area);
+}
+
+fn render_compact(f: &mut Frame, area: Rect, app: &App) {
     let cols = Layout::horizontal([
         Constraint::Length(21), // logo
         Constraint::Length(7),  // fan
@@ -36,7 +97,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(logo_lines), cols[0]);
 
     if !app.no_fan {
-        let frame = FAN_FRAMES[app.fan_frame % 4];
+        // fan_frame advances mod 8 at double rate; halve it here so the
+        // 4-frame compact fan keeps its original perceived speed.
+        let frame = FAN_FRAMES[(app.fan_frame / 2) % 4];
         let fan_lines: Vec<Line> = frame
             .iter()
             .map(|l| Line::styled(*l, Style::default().fg(theme::DIM)))
@@ -44,6 +107,26 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(Paragraph::new(fan_lines), cols[1]);
     }
 
+    f.render_widget(facts_paragraph(app), cols[2]);
+}
+
+fn render_housed_fan(f: &mut Frame, area: Rect, frame: usize) {
+    let dim = Style::default().fg(theme::DIM);
+    let txt = Style::default().fg(theme::TEXT);
+    let blades = FAN_BLADES[frame];
+    let mut lines = vec![Line::styled(" ╭─────╮", dim)];
+    for row in blades {
+        lines.push(Line::from(vec![
+            Span::styled(" │", dim),
+            Span::styled(row, txt),
+            Span::styled("│", dim),
+        ]));
+    }
+    lines.push(Line::styled(" ╰─────╯", dim));
+    f.render_widget(Paragraph::new(lines), area);
+}
+
+fn facts_paragraph(app: &App) -> Paragraph<'_> {
     let (uptime, load) = (
         app.medium.as_ref().map_or(0, |m| m.uptime_secs),
         app.fast.as_ref().map_or(0.0, |f| f.load_avg),
@@ -56,12 +139,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         Line::from(format!("up {} · load {:.2}", fmt_duration(uptime), load)),
         Line::from(""),
     ];
-    f.render_widget(
-        Paragraph::new(facts)
-            .style(Style::default().fg(theme::DIM))
-            .alignment(Alignment::Right),
-        cols[2],
-    );
+    Paragraph::new(facts)
+        .style(Style::default().fg(theme::DIM))
+        .alignment(Alignment::Right)
 }
 
 #[cfg(test)]
@@ -74,10 +154,27 @@ mod tests {
     }
 
     #[test]
+    fn logo4_is_four_uniform_rows_within_budget() {
+        let w = super::LOGO4[0].chars().count();
+        assert_eq!(super::LOGO4.len(), 4);
+        assert!(super::LOGO4.iter().all(|r| r.chars().count() == w));
+        assert!(w <= 26);
+    }
+
+    #[test]
     fn fan_frames_are_uniform() {
         for frame in super::FAN_FRAMES {
             let w = frame[0].chars().count();
             assert!(frame.iter().all(|r| r.chars().count() == w));
+        }
+    }
+
+    #[test]
+    fn housed_fan_blades_are_eight_uniform_frames() {
+        assert_eq!(super::FAN_BLADES.len(), 8);
+        for frame in super::FAN_BLADES {
+            assert_eq!(frame.len(), 3);
+            assert!(frame.iter().all(|r| r.chars().count() == 5), "{frame:?}");
         }
     }
 }
