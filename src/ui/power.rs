@@ -15,8 +15,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
+    let hero = font::hero_fits(inner);
     let rows = Layout::vertical([
-        Constraint::Length(3), // hero number
+        Constraint::Length(if hero { 4 } else { 1 }),
         Constraint::Min(2),    // stacked chart
         Constraint::Length(1), // battery footer
     ])
@@ -25,11 +26,19 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     match &m.power {
         Some(p) => {
             let total = p.cpu_w + p.gpu_w + p.ane_w;
-            let hero: Vec<Line> = font::big_text(&format!("{total:.1} W"))
-                .into_iter()
-                .map(|r| Line::styled(r, Style::default().fg(theme::ACCENT)))
-                .collect();
-            f.render_widget(Paragraph::new(hero), rows[0]);
+            let text = format!("{total:.1} W");
+            if hero {
+                let lines: Vec<Line> = font::big_text(&text)
+                    .into_iter()
+                    .map(|r| Line::styled(r, Style::default().fg(theme::ACCENT)))
+                    .collect();
+                f.render_widget(Paragraph::new(lines), rows[0]);
+            } else {
+                f.render_widget(
+                    Paragraph::new(Span::styled(text, Style::default().fg(theme::ACCENT).bold())),
+                    rows[0],
+                );
+            }
             render_stack(f, rows[1], app);
         }
         None => {
@@ -86,3 +95,29 @@ fn render_stack(f: &mut Frame, area: Rect, app: &App) {
     .y_axis(Axis::default().bounds([0.0, y_max]));
     f.render_widget(chart, area);
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+
+    fn draw(w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn hero_when_room_compact_when_small() {
+        // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W"
+        let full = draw(40, 12); // inner 38x10 → hero
+        assert!(full.contains("▀▀▀█"), "4-row '7' glyph missing"); // '7' row 0
+        let compact = draw(40, 10); // inner 38x8 → compact
+        assert!(compact.contains("7.9 W"));
+        assert!(!compact.contains("▀▀▀█"));
+    }
+}
+
