@@ -89,3 +89,20 @@ fn ports_card_sits_under_processes_not_full_width() {
          got {last_char:?} (full-width ports row?)"
     );
 }
+
+#[test]
+fn full_tier_shows_hero_font_and_housed_fan() {
+    let c = draw_at(160, 45);
+    assert!(c.contains("╭─────╮"), "housed fan missing");
+    assert!(c.contains("█ ▄ █"), "4-row logo W missing");
+    assert!(c.contains("▄  █"), "cpu hero '4' glyph missing"); // total_cpu 41 → "41%"
+    assert!(c.contains("█  ▄▀"), "hero '%' glyph missing");
+}
+
+#[test]
+fn compact_tier_keeps_old_visuals() {
+    let c = draw_at(80, 24);
+    assert!(!c.contains("╭─────╮"), "housed fan must not render at 80x24");
+    assert!(!c.contains("█ ▄ █"), "4-row logo must not render at 80x24");
+    assert!(c.contains("88.0°C"), "compact temp readout missing");
+}
