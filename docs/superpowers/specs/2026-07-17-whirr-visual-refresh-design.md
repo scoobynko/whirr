@@ -52,9 +52,11 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
 - Star fan (revised 2026-07-17 from a housed-blade design, per user's visual
-  reference): an 11×5 grid of ✳ cells forming 8 static arms radiating from
-  an empty hub. Arms alternate white (TEXT) and amber; each frame the colors
-  flip — visually identical to an 8-arm wheel rotating 45° per tick:
+  reference; motion revised again same day — geometric, not color-based, and
+  brand color only): an 11×5 grid of ✳ cells forming 8 arms radiating from
+  an empty hub, all in ACCENT teal. One arm is always hidden; the gap
+  advances one position per frame (8 frames per revolution), so the wheel
+  reads as rotating:
 
 ```
  ✳   ✳   ✳
