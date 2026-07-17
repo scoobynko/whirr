@@ -43,7 +43,9 @@ const FAN_BLADES: [[&str; 3]; 8] = [
 ];
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    if area.height >= 5 {
+    // Full tier needs 7 rows: 1 (top pad) + 5 (band) + 1 (bottom pad).
+    // Anything shorter falls back to compact.
+    if area.height >= 7 {
         render_full(f, area, app);
     } else {
         render_compact(f, area, app);
@@ -175,6 +177,29 @@ mod tests {
         for frame in super::FAN_BLADES {
             assert_eq!(frame.len(), 3);
             assert!(frame.iter().all(|r| r.chars().count() == 5), "{frame:?}");
+        }
+    }
+
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+
+    fn draw_header(w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn full_tier_needs_seven_rows_for_unclipped_housing() {
+        let full = draw_header(80, 7);
+        assert!(full.contains("╭─────╮"), "housing top missing at height 7");
+        assert!(full.contains("╰─────╯"), "housing bottom clipped at height 7");
+        for h in [5, 6] {
+            let short = draw_header(80, h);
+            assert!(!short.contains("╭─────╮"), "height {h} must fall back to compact");
         }
     }
 }
