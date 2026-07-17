@@ -51,24 +51,30 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Row 0 blank, rows 1–5 content, row 6 blank.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
-- Star fan (final form — windmill flip, chosen by user after trying color
-  flip, rotating gap, and continuous rotation): a 10×4 windmill jumping
-  between + and × states, all in ACCENT teal. Four rows tall to match the
-  hero font/logo height; blades are e2b.dev-style double-asterisk strokes
-  (✳✳ pairs; horizontal arms 2 rows thick to counter cell aspect). The
-  state flips every 4 fan ticks (~1s idle, ~0.2s loaded). The + state:
+- Star fan (final form — bigger true rotation, chosen after color flip,
+  rotating gap, small continuous rotation, and windmill flip all failed to
+  read as spinning; star glyphs carry no per-cell direction so only real
+  cell displacement over a fine-enough grid works): an e2b.dev-style
+  asterisk on a 17×7 grid, 8 blades × 3 star cells, rasterized from angle
+  math each frame — 15°/tick, 24 ticks per revolution, all ACCENT teal.
+  Near-vertical blades draw ✳✳ pairs to counter the ~2:1 cell aspect. The
+  header band grows to 7 rows (full header 9 incl. padding); logo and
+  facts center against the fan. Cardinal frame:
 
 ```
-    ✳✳
-✳ ✳ ✳✳ ✳ ✳
-✳ ✳ ✳✳ ✳ ✳
-    ✳✳
+       ✳✳
+  ✳✳   ✳✳  ✳✳
+     ✳ ✳✳✳
+✳ ✳ ✳     ✳ ✳ ✳
+     ✳✳✳ ✳
+  ✳✳  ✳✳   ✳✳
+      ✳✳
 ```
 
-- `App::tick_fan` advances modulo 8; the windmill state is
-  `(fan_frame / 4) % 2`. `fan_interval` stays 250ms idle → 50ms loaded;
-  load-scaling unchanged; the compact fan derives its 4-frame cycle as
-  `(fan_frame / 2) % 4`.
+- `App::tick_fan` advances modulo 24. `fan_interval` stays 250ms idle →
+  50ms loaded (6s/rev idle, 1.2s loaded); load-scaling unchanged; the
+  compact fan derives its 4-frame cycle as `(fan_frame / 2) % 4`.
+- `ui/mod.rs` full tier: header `Length(9)` (was 7), gauges `Length(12)`.
 - `--no-fan` continues to hide the fan.
 
 **Compact tier** (given 3 rows): today's header verbatim — 3-row logo,

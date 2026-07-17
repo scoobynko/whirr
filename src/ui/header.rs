@@ -29,32 +29,20 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
     [" ╲   ", "  ✻  ", "   ╲ "],
 ];
 
-// Full-tier star fan: a windmill flipping between + and × states, 4 rows
-// tall to match the hero font/logo height. Blades are double-asterisk
-// strokes (✳✳ pairs; horizontal arms are 2 rows thick instead, countering
-// the ~2:1 cell aspect) like the e2b.dev asterisk. The flip advances every
-// FAN_FLIP_TICKS ticks — a 4-arm wheel turning 45° per step shows exactly
-// these two states. Single brand color.
-const FAN_FLIP_TICKS: usize = 4;
-const WINDMILL: [[&str; 4]; 2] = [
-    [
-        "    ✳✳    ",
-        "✳ ✳ ✳✳ ✳ ✳",
-        "✳ ✳ ✳✳ ✳ ✳",
-        "    ✳✳    ",
-    ],
-    [
-        "✳✳      ✳✳",
-        " ✳✳ ✳✳ ✳✳ ",
-        " ✳✳ ✳✳ ✳✳ ",
-        "✳✳      ✳✳",
-    ],
-];
+// Full-tier star fan: an e2b.dev-style asterisk of 8 blades with 3 star
+// cells each, rasterized from angle math every frame so the whole figure
+// rotates continuously — 15° per tick, FAN_ROT_FRAMES ticks per
+// revolution. Blades within ~30° of vertical draw ✳✳ pairs: at the
+// terminal's ~2:1 cell aspect a single ✳ column looks threadbare next to
+// the stretched horizontal blades. Single brand color.
+const FAN_H: usize = 7;
+const FAN_W: usize = 17;
+const FAN_ROT_FRAMES: usize = 24;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    // Full tier needs 7 rows: 1 (top pad) + 5 (band) + 1 (bottom pad).
-    // Anything shorter falls back to compact.
-    if area.height >= 7 {
+    // Full tier needs 9 rows: 1 (top pad) + 7 (band, sized to the fan) +
+    // 1 (bottom pad). Anything shorter falls back to compact.
+    if area.height >= 9 {
         render_full(f, area, app);
     } else {
         render_compact(f, area, app);
@@ -62,32 +50,33 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_full(f: &mut Frame, area: Rect, app: &App) {
-    // Breathing room: one blank row above and below the 5-row content band.
+    // Breathing room: one blank row above and below the 7-row content band.
     let bands =
-        Layout::vertical([Constraint::Length(1), Constraint::Length(5), Constraint::Min(0)])
+        Layout::vertical([Constraint::Length(1), Constraint::Length(7), Constraint::Min(0)])
             .split(area);
     let band = bands[1];
     let cols = Layout::horizontal([
         Constraint::Length(26), // logo
-        Constraint::Length(11), // star fan
+        Constraint::Length(19), // star fan
         Constraint::Min(0),     // ambient facts
     ])
     .split(band);
 
+    // Logo and facts center against the 7-row fan.
+    let logo_area = Rect { y: band.y + 1, height: band.height.saturating_sub(1).min(4), ..cols[0] };
     let logo_lines: Vec<Line> = LOGO4
         .iter()
         .map(|l| Line::styled(*l, Style::default().fg(theme::ACCENT).bold()))
         .collect();
-    f.render_widget(Paragraph::new(logo_lines), cols[0]);
+    f.render_widget(Paragraph::new(logo_lines), logo_area);
 
     if !app.no_fan {
         render_star_fan(f, cols[1], app.fan_frame);
     }
 
-    // Facts sit one row down so their block centers against the fan hub.
     let facts_area = Rect {
-        y: band.y + 1,
-        height: band.height.saturating_sub(1).min(3),
+        y: band.y + 2,
+        height: band.height.saturating_sub(2).min(3),
         ..cols[2]
     };
     f.render_widget(facts_paragraph(app), facts_area);
@@ -122,10 +111,36 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_star_fan(f: &mut Frame, area: Rect, frame: usize) {
-    let state = WINDMILL[(frame / FAN_FLIP_TICKS) % 2];
-    let lines: Vec<Line> = state
+    use std::f32::consts::{FRAC_PI_4, TAU};
+    let mut grid = [[false; FAN_W]; FAN_H];
+    let base = frame as f32 * TAU / FAN_ROT_FRAMES as f32;
+    for arm in 0..8 {
+        let theta = base + arm as f32 * FRAC_PI_4;
+        let vertical_ish = theta.sin().abs() < 0.5;
+        for r in [1.4f32, 2.3, 3.2] {
+            let row = (3.0 - r * theta.cos()).round() as i32;
+            // Columns stretched x2.2 against the ~2:1 cell aspect; the pair
+            // shifts half a cell left so ✳✳ stays centered on the blade.
+            let shift = if vertical_ish { 0.5 } else { 0.0 };
+            let col = (8.0 + 2.2 * r * theta.sin() - shift).round() as i32;
+            let span = if vertical_ish { 2 } else { 1 };
+            for c in col..col + span {
+                if (0..FAN_H as i32).contains(&row) && (0..FAN_W as i32).contains(&c) {
+                    grid[row as usize][c as usize] = true;
+                }
+            }
+        }
+    }
+    let style = Style::default().fg(theme::ACCENT);
+    let lines: Vec<Line> = grid
         .iter()
-        .map(|l| Line::styled(*l, Style::default().fg(theme::ACCENT)))
+        .map(|row| {
+            Line::from(
+                row.iter()
+                    .map(|&on| if on { Span::styled("✳", style) } else { Span::raw(" ") })
+                    .collect::<Vec<_>>(),
+            )
+        })
         .collect();
     f.render_widget(Paragraph::new(lines), area);
 }
@@ -174,29 +189,23 @@ mod tests {
     }
 
     #[test]
-    fn windmill_states_are_four_rows_matching_the_font() {
-        // Both states carry a center hub; the x state's blades plus hub
-        // total 20 cells, the + state's 16.
-        for (state, expected_stars) in super::WINDMILL.iter().zip([16, 20]) {
-            assert_eq!(state.len(), 4, "fan must match the 4-row font height");
-            assert!(state.iter().all(|r| r.chars().count() == 10));
-            let stars: usize = state.iter().map(|r| r.matches("✳").count()).sum();
-            assert_eq!(stars, expected_stars, "double-asterisk blades with hub");
-        }
-    }
-
-    #[test]
-    fn windmill_flips_every_fourth_tick() {
+    fn star_fan_rotates_between_adjacent_frames() {
         let draw_frame = |f: usize| -> String {
-            let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
+            let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
             let mut app = App::demo();
             app.fan_frame = f;
             t.draw(|fr| super::render(fr, fr.area(), &app)).unwrap();
             t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
         };
-        assert_eq!(draw_frame(0), draw_frame(3), "state must hold for 4 ticks");
-        assert_ne!(draw_frame(0), draw_frame(4), "state must flip on the 4th tick");
-        assert_ne!(draw_frame(3), draw_frame(4), "flip boundary at frame 4");
+        let frames: Vec<String> = (0..super::FAN_ROT_FRAMES).map(draw_frame).collect();
+        for (f, frame) in frames.iter().enumerate() {
+            let stars = frame.matches("✳").count();
+            assert!((12..=48).contains(&stars), "frame {f}: {stars} stars out of range");
+        }
+        for f in 0..frames.len() {
+            let next = (f + 1) % frames.len();
+            assert_ne!(frames[f], frames[next], "frames {f}/{next} identical — no rotation");
+        }
     }
 
     use ratatui::backend::TestBackend;
@@ -212,10 +221,10 @@ mod tests {
     }
 
     #[test]
-    fn full_tier_needs_seven_rows_for_unclipped_star_fan() {
-        let full = draw_header(80, 7);
-        assert!(full.contains("✳"), "star fan missing at height 7");
-        for h in [5, 6] {
+    fn full_tier_needs_nine_rows_for_unclipped_star_fan() {
+        let full = draw_header(80, 9);
+        assert!(full.contains("✳"), "star fan missing at height 9");
+        for h in [5, 6, 7, 8] {
             let short = draw_header(80, h);
             assert!(!short.contains("✳"), "height {h} must fall back to compact");
         }
@@ -223,7 +232,7 @@ mod tests {
 
     #[test]
     fn star_fan_uses_only_brand_accent() {
-        let mut t = Terminal::new(TestBackend::new(80, 7)).unwrap();
+        let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
         let app = App::demo();
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let buf = t.backend().buffer().clone();

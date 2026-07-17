@@ -39,13 +39,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     let show_network = area.height >= 16;
     let show_power = area.width >= 70;
     let show_temp = area.width >= 50;
-    // Full visual tier: padded header with housed fan, hero-number gauge
-    // cards. Needs width for the ~27-col hero strings (4 cards x 30 cols)
-    // and height for header 7 + gauges 12 + a useful body.
+    // Full visual tier: padded header with rotating star fan, hero-number
+    // gauge cards. Needs width for the ~27-col hero strings (4 cards x 30
+    // cols) and height for header 9 + gauges 12 + a useful body.
     let full = area.height >= 30 && area.width >= 120;
 
     let chunks = Layout::vertical([
-        Constraint::Length(if full { 7 } else { 3 }),
+        Constraint::Length(if full { 9 } else { 3 }),
         Constraint::Length(if full { 12 } else { 10 }),
         Constraint::Min(6),
     ])
