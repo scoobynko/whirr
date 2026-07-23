@@ -6,6 +6,7 @@ pub mod network;
 pub mod ports;
 pub mod power;
 pub mod processes;
+pub mod spark;
 pub mod temp;
 pub mod theme;
 
