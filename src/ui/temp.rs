@@ -1,6 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::symbols::Marker;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use super::{font, theme};
@@ -58,20 +57,14 @@ fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
 }
 
 fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
-    let points: Vec<(f64, f64)> = app
+    // Baseline-shift 30→105 °C onto 0→75 so the idle-to-hot band uses the full
+    // bar height instead of hugging the top.
+    let data: Vec<u64> = app
         .temp_hist
         .iter()
-        .enumerate()
-        .map(|(i, v)| (i as f64, f64::from(v)))
+        .map(|v| (v - 30.0).clamp(0.0, 75.0).round() as u64)
         .collect();
-    let chart = Chart::new(vec![Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color))
-        .data(&points)])
-    .x_axis(Axis::default().bounds([0.0, 59.0]))
-    .y_axis(Axis::default().bounds([30.0, 105.0]));
-    f.render_widget(chart, area);
+    super::spark::render(f, area, &data, 75, Style::default().fg(color));
 }
 
 #[cfg(test)]
@@ -132,5 +125,17 @@ mod tests {
             content.contains(coarse_row0.as_str()),
             "coarse fallback row missing — hero should fall back to \"100°C\" when precise overflows"
         );
+    }
+
+    #[test]
+    fn history_renders_block_sparkline() {
+        let mut t = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut app = App::demo();
+        for v in [40.0_f32, 60.0, 95.0, 70.0, 50.0] {
+            app.temp_hist.push(v);
+        }
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(s.contains('█') || s.contains('▇'), "temp history should render filled block bars");
     }
 }
