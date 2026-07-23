@@ -1,6 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::symbols::Marker;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph, Wrap};
+use ratatui::widgets::{Paragraph, Wrap};
 
 use super::{font, theme};
 use crate::app::App;
@@ -79,22 +78,8 @@ fn render_heatmap(f: &mut Frame, area: Rect, app: &App, per_core: &[f32]) {
 }
 
 fn render_history(f: &mut Frame, area: Rect, app: &App) {
-    let points: Vec<(f64, f64)> = app
-        .cpu_hist
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i as f64, f64::from(v)))
-        .collect();
-    let dataset = Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(theme::ACCENT))
-        .data(&points);
-    let chart = Chart::new(vec![dataset])
-        .x_axis(Axis::default().bounds([0.0, 59.0]))
-        .y_axis(Axis::default().bounds([0.0, 100.0]))
-        .style(Style::default().fg(theme::DIM));
-    f.render_widget(chart, area);
+    let data: Vec<u64> = app.cpu_hist.iter().map(|v| v.round() as u64).collect();
+    super::spark::render(f, area, &data, 100, Style::default().fg(theme::ACCENT));
 }
 
 #[cfg(test)]
@@ -128,5 +113,18 @@ mod tests {
         let compact = draw(40, 10);
         assert!(compact.contains(" 12"), "per-core numbered cell missing"); // demo core 0 at 12%
         assert!(!compact.contains("▄  █"));
+    }
+
+    #[test]
+    fn history_renders_block_sparkline() {
+        let mut t = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut app = App::demo();
+        app.statics.e_cores = 2;
+        for v in [10.0_f32, 40.0, 90.0, 60.0, 30.0] {
+            app.cpu_hist.push(v);
+        }
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(s.contains('█') || s.contains('▇'), "cpu history should render filled block bars");
     }
 }
