@@ -1,6 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::symbols::Marker;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use super::{font, theme};
@@ -17,9 +16,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let hero = font::hero_fits(inner);
     let rows = Layout::vertical([
-        Constraint::Length(if hero { 4 } else { 1 }),
-        Constraint::Min(2),    // stacked chart
-        Constraint::Length(1), // battery footer
+        Constraint::Length(if hero { 4 } else { 1 }), // hero
+        Constraint::Length(1),                         // cpu/gpu/ane legend
+        Constraint::Min(2),                            // total sparkline
+        Constraint::Length(1),                         // battery footer
     ])
     .split(inner);
 
@@ -40,7 +40,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                     rows[0],
                 );
             }
-            render_stack(f, rows[1], app);
+            let legend = format!("cpu {:.1} · gpu {:.1} · ane {:.1}", p.cpu_w, p.gpu_w, p.ane_w);
+            f.render_widget(
+                Paragraph::new(legend).style(Style::default().fg(theme::DIM)),
+                rows[1],
+            );
+            render_spark(f, rows[2], app);
         }
         None => {
             f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), rows[0]);
@@ -57,44 +62,23 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
     f.render_widget(
         Paragraph::new(battery_line).style(Style::default().fg(theme::DIM)),
-        rows[2],
+        rows[3],
     );
 }
 
-/// Stacked braille lines: cpu, cpu+gpu, cpu+gpu+ane — three cumulative series.
-fn render_stack(f: &mut Frame, area: Rect, app: &App) {
-    let hist: Vec<(f64, f64, f64)> = app.power_hist.iter().collect();
-    if hist.is_empty() {
+/// Filled block sparkline of total watts (cpu + gpu + ane).
+fn render_spark(f: &mut Frame, area: Rect, app: &App) {
+    let data: Vec<u64> = app
+        .power_hist
+        .iter()
+        .map(|(c, g, a)| ((c + g + a) * 10.0).round() as u64)
+        .collect();
+    if data.is_empty() {
         return;
     }
-    let cpu: Vec<(f64, f64)> = hist.iter().enumerate().map(|(i, v)| (i as f64, v.0)).collect();
-    let cpu_gpu: Vec<(f64, f64)> =
-        hist.iter().enumerate().map(|(i, v)| (i as f64, v.0 + v.1)).collect();
-    let total: Vec<(f64, f64)> =
-        hist.iter().enumerate().map(|(i, v)| (i as f64, v.0 + v.1 + v.2)).collect();
-    let y_max = total.iter().map(|p| p.1).fold(1.0, f64::max) * 1.2;
-
-    // total (brightest) drawn last so it sits on top
-    let chart = Chart::new(vec![
-        Dataset::default()
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme::gradient(0.4)))
-            .data(&cpu),
-        Dataset::default()
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme::gradient(0.7)))
-            .data(&cpu_gpu),
-        Dataset::default()
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme::ACCENT))
-            .data(&total),
-    ])
-    .x_axis(Axis::default().bounds([0.0, 59.0]))
-    .y_axis(Axis::default().bounds([0.0, y_max]));
-    f.render_widget(chart, area);
+    let peak = app.power_hist.iter().map(|(c, g, a)| c + g + a).fold(1.0, f64::max) * 1.2;
+    let max = (peak * 10.0).round() as u64;
+    super::spark::render(f, area, &data, max, Style::default().fg(theme::ACCENT));
 }
 
 #[cfg(test)]
@@ -116,9 +100,22 @@ mod tests {
         // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W"
         let full = draw(40, 12); // inner 38x10 → hero
         assert!(full.contains("▀▀▀█"), "4-row '7' glyph missing"); // '7' row 0
+        assert!(full.contains("cpu 6.4"), "power legend (cpu/gpu/ane) missing");
         let compact = draw(40, 10); // inner 38x8 → compact
         assert!(compact.contains("7.9 W"));
         assert!(!compact.contains("▀▀▀█"));
+    }
+
+    #[test]
+    fn history_renders_block_sparkline() {
+        let mut t = Terminal::new(TestBackend::new(40, 12)).unwrap();
+        let mut app = App::demo();
+        for v in [(2.0_f64, 0.5, 0.1), (5.0, 1.0, 0.2), (8.0, 2.0, 0.3)] {
+            app.power_hist.push(v);
+        }
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(s.contains('█') || s.contains('▇'), "power history should render filled block bars");
     }
 }
 
