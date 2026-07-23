@@ -107,6 +107,10 @@ Details:
 - **Memory consolidated line**: `pressure NORMAL · swap 1.2G / 2.0G` in dim;
   the separate pressure line disappears (pressure also colors the hero).
 - **Power**: layout as today, hero re-rendered in the new font (4 rows).
+- **History charts**: all cards (and Network) render history as filled block
+  sparklines (`▁▂▃▄▅▆▇█`), not Braille lines — see
+  `2026-07-22-whirr-sparkline-charts-design.md`. Network splits into two
+  stacked download/upload bands.
 
 ## 4. Responsive behavior
 
