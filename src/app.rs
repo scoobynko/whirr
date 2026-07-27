@@ -37,7 +37,10 @@ pub struct App {
     pub pending_kill: Option<(i32, String)>,
     pub message: Option<String>,
     pub no_fan: bool,
-    pub fan_frame: usize,
+    /// The burst's inner-ring rotation in degrees, wrapped to `0.0..360.0`.
+    /// The outer ring is its negation, so one accumulator drives both. Thermal:
+    /// the hotter the machine, the faster it turns.
+    pub fan_angle_deg: f32,
     pub should_quit: bool,
     pub dirty: bool,
 }
@@ -59,7 +62,7 @@ impl App {
             pending_kill: None,
             message: None,
             no_fan,
-            fan_frame: 0,
+            fan_angle_deg: 0.0,
             should_quit: false,
             dirty: true,
         }
@@ -221,24 +224,31 @@ impl App {
         }
     }
 
-    pub fn fan_interval(&self) -> Duration {
-        // Simulated Mac fan curve: lazy below ~55°C, ramping steeply toward
-        // 95°C — temperature is what actually drives real fans, so the
-        // header fan mirrors it. Falls back to CPU load when the machine
-        // has no usable temp sensor. 600ms/tick idle (~14s per revolution)
-        // down to 80ms/tick when hot (~2s per revolution).
-        let heat = match self.medium.as_ref().and_then(|m| m.temp_c) {
+    /// Simulated Mac fan curve: lazy below ~55°C, ramping steeply toward
+    /// 95°C — temperature is what actually drives real fans. Falls back to CPU
+    /// load when the machine has no usable temp sensor.
+    pub fn heat(&self) -> f32 {
+        match self.medium.as_ref().and_then(|m| m.temp_c) {
             Some(t) => ((t - 55.0) / 40.0).clamp(0.0, 1.0),
             None => self.fast.as_ref().map_or(0.0, |f| (f.total_cpu / 100.0).clamp(0.0, 1.0)),
-        };
-        Duration::from_millis((600.0 - 520.0 * f64::from(heat)) as u64)
+        }
     }
 
-    pub fn tick_fan(&mut self) {
-        // 24 frames = one revolution of the header star fan (15° per
-        // tick); the compact fan derives its 4-frame cycle as
-        // (fan_frame / 2) % 4, which wraps cleanly since 24 % 8 == 0.
-        self.fan_frame = (self.fan_frame + 1) % 24;
+    /// Redraw interval for the burst: 125ms idle down to 60ms hot. The frame
+    /// rate has to rise with the spin, not just the spin itself — each ring is
+    /// 10-fold symmetric, so anything past 18°/frame aliases into a backwards
+    /// spin. At 60ms/125ms this stays at 10.8°/3.2° per frame.
+    pub fn fan_interval(&self) -> Duration {
+        Duration::from_millis((125.0 - 65.0 * f64::from(self.heat())) as u64)
+    }
+
+    /// Advance the burst rotation over `dt` of real time: 360°/14s idle up to
+    /// 360°/2s hot, matching the perceived range of the old stepped fan.
+    pub fn tick_fan(&mut self, dt: Duration) {
+        const COLD_DPS: f32 = 360.0 / 14.0;
+        const HOT_DPS: f32 = 360.0 / 2.0;
+        let dps = COLD_DPS + (HOT_DPS - COLD_DPS) * self.heat();
+        self.fan_angle_deg = (self.fan_angle_deg + dps * dt.as_secs_f32()).rem_euclid(360.0);
         self.dirty = true;
     }
 }
@@ -262,6 +272,16 @@ mod tests {
             ],
             net_rx_rate: 0.0, net_tx_rate: 0.0, net_rx_total: 0, net_tx_total: 0,
             load_avg: 1.0, mem_total: 1,
+        }
+    }
+
+    fn demo_medium(temp_c: f32) -> MediumSnap {
+        MediumSnap {
+            temp_c: Some(temp_c),
+            power: None,
+            battery: None,
+            memory: None,
+            uptime_secs: 3600,
         }
     }
 
@@ -342,14 +362,68 @@ mod tests {
     }
 
     #[test]
-    fn fan_frame_wraps_at_twenty_four() {
+    fn heat_tracks_temperature_and_falls_back_to_load() {
         let mut a = App::new(false);
-        for _ in 0..23 {
-            a.tick_fan();
+        assert_eq!(a.heat(), 0.0, "no samples yet");
+        a.ingest(Snapshot::Medium(demo_medium(40.0)));
+        assert_eq!(a.heat(), 0.0, "40C is below the 55C floor");
+        a.ingest(Snapshot::Medium(demo_medium(95.0)));
+        assert_eq!(a.heat(), 1.0, "95C is the ceiling");
+        a.ingest(Snapshot::Medium(demo_medium(75.0)));
+        assert!((a.heat() - 0.5).abs() < 0.01, "75C is halfway");
+    }
+
+    #[test]
+    fn fan_interval_ramps_from_125ms_to_60ms() {
+        let mut a = App::new(false);
+        assert_eq!(a.fan_interval(), Duration::from_millis(125));
+        a.ingest(Snapshot::Medium(demo_medium(95.0)));
+        assert_eq!(a.fan_interval(), Duration::from_millis(60));
+    }
+
+    #[test]
+    fn tick_fan_never_turns_a_ring_more_than_eighteen_degrees_per_frame() {
+        // Each ring is 10-fold symmetric: above 18 deg/frame it aliases and
+        // appears to spin backwards. Must hold across the whole thermal range.
+        for temp in [40.0, 55.0, 65.0, 75.0, 85.0, 95.0, 110.0] {
+            let mut a = App::new(false);
+            a.ingest(Snapshot::Medium(demo_medium(temp)));
+            let dt = a.fan_interval();
+            a.fan_angle_deg = 0.0;
+            a.tick_fan(dt);
+            assert!(
+                a.fan_angle_deg < 18.0,
+                "{temp}C turns {}deg per frame — aliases",
+                a.fan_angle_deg
+            );
         }
-        assert_eq!(a.fan_frame, 23);
-        a.tick_fan();
-        assert_eq!(a.fan_frame, 0);
+    }
+
+    #[test]
+    fn tick_fan_spins_faster_when_hot_and_wraps_at_360() {
+        let mut cold = App::new(false);
+        cold.ingest(Snapshot::Medium(demo_medium(40.0)));
+        let mut hot = App::new(false);
+        hot.ingest(Snapshot::Medium(demo_medium(95.0)));
+        let dt = Duration::from_millis(100);
+        cold.tick_fan(dt);
+        hot.tick_fan(dt);
+        assert!(hot.fan_angle_deg > cold.fan_angle_deg * 3.0, "hot fan should be much faster");
+
+        let mut a = App::new(false);
+        a.fan_angle_deg = 359.0;
+        a.ingest(Snapshot::Medium(demo_medium(95.0)));
+        a.tick_fan(Duration::from_millis(100));
+        assert!(a.fan_angle_deg < 360.0, "angle must wrap, got {}", a.fan_angle_deg);
+    }
+
+    #[test]
+    fn cold_fan_takes_about_fourteen_seconds_per_revolution() {
+        let mut a = App::new(false);
+        a.ingest(Snapshot::Medium(demo_medium(40.0)));
+        a.tick_fan(Duration::from_secs(1));
+        // 360/14 = 25.7 deg/s
+        assert!((a.fan_angle_deg - 25.7).abs() < 0.5, "got {} deg/s", a.fan_angle_deg);
     }
 
     #[test]
