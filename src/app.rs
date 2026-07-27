@@ -332,8 +332,8 @@ mod tests {
     #[test]
     fn fan_speed_follows_simulated_thermal_curve() {
         let mut a = App::new(false);
-        // No data at all: lazy idle spin.
-        assert_eq!(a.fan_interval().as_millis(), 600);
+        // No data at all: idle spin at 125ms.
+        assert_eq!(a.fan_interval().as_millis(), 125);
 
         // Temperature drives the curve when a sensor exists.
         let snap = |t: f32| MediumSnap {
@@ -344,12 +344,12 @@ mod tests {
             uptime_secs: 0,
         };
         a.ingest(Snapshot::Medium(snap(55.0)));
-        assert_eq!(a.fan_interval().as_millis(), 600, "cool chip keeps idle speed");
+        assert_eq!(a.fan_interval().as_millis(), 125, "cool chip keeps idle speed");
         a.ingest(Snapshot::Medium(snap(95.0)));
-        assert_eq!(a.fan_interval().as_millis(), 80, "hot chip spins fastest");
+        assert_eq!(a.fan_interval().as_millis(), 60, "hot chip spins fastest");
         a.ingest(Snapshot::Medium(snap(75.0)));
         let mid = a.fan_interval().as_millis();
-        assert!(mid > 80 && mid < 600, "mid temp ramps between: {mid}");
+        assert!(mid > 60 && mid < 125, "mid temp ramps between: {mid}");
     }
 
     #[test]
@@ -358,7 +358,7 @@ mod tests {
         let mut f = demo_fast();
         f.total_cpu = 100.0;
         a.ingest(Snapshot::Fast(f));
-        assert_eq!(a.fan_interval().as_millis(), 80, "full load = fastest without sensor");
+        assert_eq!(a.fan_interval().as_millis(), 60, "full load = fastest without sensor");
     }
 
     #[test]
