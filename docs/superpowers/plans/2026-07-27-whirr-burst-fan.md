@@ -672,8 +672,9 @@ Replace the whole of `fan_interval` and `tick_fan` (lines 224-243) with:
 
 - [ ] **Step 4: Run to verify it passes**
 
-Run: `cargo test --lib app`
-Expected: PASS. `src/main.rs` and `src/ui/header.rs` will not compile yet — that is expected and fixed in Tasks 5 and 6. Use `cargo test --lib app` (not a bare `cargo test`) until then.
+**These tests cannot be run in this task.** `cargo test --lib` compiles the entire library crate, including `src/ui/header.rs`, which still references the removed `fan_frame` and will not build until Task 6. There is no filter that avoids this — `--lib app` filters which tests *run*, not what gets *compiled*.
+
+So: verify the implementation by inspection against the code above, commit, and note in your report that test execution is deferred. **Task 6 Step 4 is where these tests actually get run**; it does not pass until they do.
 
 - [ ] **Step 5: Commit**
 
@@ -916,6 +917,8 @@ with:
 
 Run: `cargo test`
 Expected: PASS — the whole suite, unit and integration.
+
+**This step also carries Task 4's deferred verification.** Task 4 added five tests to `src/app.rs` (`heat_tracks_temperature_and_falls_back_to_load`, `fan_interval_ramps_from_125ms_to_60ms`, `tick_fan_never_turns_a_ring_more_than_eighteen_degrees_per_frame`, `tick_fan_spins_faster_when_hot_and_wraps_at_360`, `cold_fan_takes_about_fourteen_seconds_per_revolution`) that could not be compiled at the time. This is the first point at which they can run. Confirm all five appear in the test output and pass, and quote them in your report. If any fails, fix `src/app.rs` — the failure is Task 4's, not a header bug.
 
 - [ ] **Step 5: Run the clippy gate**
 
