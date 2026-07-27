@@ -117,14 +117,22 @@ mod tests {
 
     #[test]
     fn history_renders_block_sparkline() {
-        let mut t = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        let mut app = App::demo();
-        app.statics.e_cores = 2;
-        for v in [10.0_f32, 40.0, 90.0, 60.0, 30.0] {
+        // Drive the chart helper directly with an area exactly as wide as
+        // the pushed history, so the whole buffer IS the chart: every column
+        // is pinned to a known sample, not just "a bar appears somewhere".
+        let mut t = Terminal::new(TestBackend::new(5, 1)).unwrap();
+        let mut app = App::new(false);
+        for v in [5.0_f32, 15.0, 30.0, 55.0, 95.0] {
             app.cpu_hist.push(v);
         }
-        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.draw(|f| super::render_history(f, f.area(), &app)).unwrap();
         let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(s.contains('█') || s.contains('▇'), "cpu history should render filled block bars");
+        // levels = round(value) * 8 / 100: 5→0(' '), 15→1(▁), 30→2(▂), 55→4(▄), 95→7(▇)
+        assert_eq!(s, " ▁▂▄▇", "chart mis-scaled or mis-positioned");
+        assert_eq!(
+            s.chars().last().unwrap(),
+            '▇',
+            "newest sample (95, the tallest) must land at the right edge"
+        );
     }
 }

@@ -72,8 +72,28 @@ impl App {
     /// `FastSnap` (a few processes, per-core loads), one `MediumSnap` (all
     /// `Some`, temp at 88.0 to exercise the amber threshold), and one
     /// `SlowSnap` (a few ports, not stale).
+    ///
+    /// The history buffers are pre-seeded with a short varied ramp before the
+    /// "current" sample lands (below), so chart-rendering tests exercise a
+    /// real filled chart body instead of a single point — a single-sample
+    /// history can never show whether the newest data lands at the right
+    /// edge of the chart (that gap is exactly how the spark::render
+    /// left-align bug shipped invisibly).
     pub fn demo() -> Self {
         let mut app = Self::new(false);
+        for v in [15.0_f32, 28.0, 52.0, 70.0, 58.0, 33.0, 22.0, 40.0, 63.0, 77.0, 49.0, 26.0] {
+            app.cpu_hist.push(v);
+        }
+        for v in [
+            (200_000.0_f64, 40_000.0),
+            (450_000.0, 90_000.0),
+            (900_000.0, 180_000.0),
+            (600_000.0, 120_000.0),
+            (1_500_000.0, 250_000.0),
+            (300_000.0, 60_000.0),
+        ] {
+            app.net_hist.push(v);
+        }
         app.ingest(Snapshot::Fast(FastSnap {
             per_core: vec![12.0, 45.0, 78.0, 30.0],
             total_cpu: 41.0,
@@ -89,6 +109,19 @@ impl App {
             load_avg: 2.35,
             mem_total: 16_000_000_000,
         }));
+        for v in [42.0_f32, 55.0, 70.0, 82.0, 91.0, 76.0, 61.0, 48.0, 65.0, 84.0] {
+            app.temp_hist.push(v);
+        }
+        for v in [
+            (2.0_f64, 0.4, 0.05),
+            (3.5, 0.7, 0.1),
+            (5.0, 1.0, 0.2),
+            (7.5, 1.6, 0.35),
+            (6.0, 1.3, 0.25),
+            (4.2, 0.9, 0.15),
+        ] {
+            app.power_hist.push(v);
+        }
         app.ingest(Snapshot::Medium(MediumSnap {
             temp_c: Some(88.0),
             power: Some(PowerSnap { cpu_w: 6.4, gpu_w: 1.2, ane_w: 0.3 }),

@@ -129,13 +129,23 @@ mod tests {
 
     #[test]
     fn history_renders_block_sparkline() {
-        let mut t = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        let mut app = App::demo();
-        for v in [40.0_f32, 60.0, 95.0, 70.0, 50.0] {
+        // Drive the chart helper directly with an area exactly as wide as
+        // the pushed history, so the whole buffer IS the chart: every column
+        // is pinned to a known sample, not just "a bar appears somewhere".
+        let mut t = Terminal::new(TestBackend::new(5, 1)).unwrap();
+        let mut app = App::new(false);
+        for v in [35.0_f32, 50.0, 70.0, 85.0, 100.0] {
             app.temp_hist.push(v);
         }
-        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.draw(|f| super::render_chart(f, f.area(), &app, super::theme::TEXT)).unwrap();
         let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(s.contains('█') || s.contains('▇'), "temp history should render filled block bars");
+        // baseline-shift (v-30).clamp(0,75), then level = shifted*8/75:
+        // 35→5→0(' '), 50→20→2(▂), 70→40→4(▄), 85→55→5(▅), 100→70(clamped 75 cap)→7(▇)
+        assert_eq!(s, " ▂▄▅▇", "chart mis-scaled or mis-positioned");
+        assert_eq!(
+            s.chars().last().unwrap(),
+            '▇',
+            "newest sample (100°C, the tallest) must land at the right edge"
+        );
     }
 }

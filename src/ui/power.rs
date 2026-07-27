@@ -108,14 +108,25 @@ mod tests {
 
     #[test]
     fn history_renders_block_sparkline() {
-        let mut t = Terminal::new(TestBackend::new(40, 12)).unwrap();
-        let mut app = App::demo();
-        for v in [(2.0_f64, 0.5, 0.1), (5.0, 1.0, 0.2), (8.0, 2.0, 0.3)] {
+        // Drive the chart helper directly with an area exactly as wide as
+        // the pushed history, so the whole buffer IS the chart: every column
+        // is pinned to a known sample, not just "a bar appears somewhere".
+        let mut t = Terminal::new(TestBackend::new(4, 1)).unwrap();
+        let mut app = App::new(false);
+        // totals (cpu+gpu+ane): 1.0, 3.0, 5.0, 10.0 W; peak = 10.0*1.2 = 12.0 W
+        for v in [(0.6_f64, 0.3, 0.1), (2.0, 0.8, 0.2), (3.5, 1.2, 0.3), (7.0, 2.5, 0.5)] {
             app.power_hist.push(v);
         }
-        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.draw(|f| super::render_spark(f, f.area(), &app)).unwrap();
         let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(s.contains('█') || s.contains('▇'), "power history should render filled block bars");
+        // scaled data = round(total*10); max = round(peak*10) = 120.
+        // level = scaled*8/120: 10→0(' '), 30→2(▂), 50→3(▃), 100→6(▆)
+        assert_eq!(s, " ▂▃▆", "chart mis-scaled or mis-positioned");
+        assert_eq!(
+            s.chars().last().unwrap(),
+            '▆',
+            "newest sample (10 W, the tallest) must land at the right edge"
+        );
     }
 }
 
