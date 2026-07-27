@@ -92,11 +92,12 @@ fn main() {
 
 Run: `cargo run --example burst_preview`
 
-Judge four things:
+Judge five things:
 1. **Width** — the last two rows must end at the same column. If braille is double-width in this font, the whole approach is off and the fallback in spec §9 applies.
 2. **Weight** — dots should be visible but thin. If they render as heavy blobs, hairlines will look chunky and `THICK` needs lowering in Task 3.
 3. **Continuity** — the diagonals should read as lines, not scattered dots.
 4. **Spacing** — no visible gutter between adjacent braille cells.
+5. **Wispiness** — braille was removed from this project's charts on 2026-07-22 for reading "wispy and jagged" (`docs/superpowers/specs/2026-07-22-whirr-sparkline-charts-design.md:8`). Radial rays are a different shape from a long chart trace, and the fan gets AA dimming the charts never had, so the verdict may not carry over — but this is the check that decides it. If the burst reads wispy, stop and fall back to spec §9's stroke glyphs.
 
 - [ ] **Step 3: Human gate — STOP here**
 
