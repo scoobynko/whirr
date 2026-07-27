@@ -346,6 +346,39 @@ pub(crate) mod tests {
         assert!(saw_accent, "no ACCENT rays");
     }
 
+    /// Cell colour at the dot nearest an absolute polar position — the same
+    /// coordinate math as `probe`, but resolved to the enclosing braille cell
+    /// (2 dots wide, 4 dots tall) rather than a single dot, so the rendered
+    /// `Span`'s foreground can be read back.
+    fn cell_tone(w: u16, h: u16, angle: f32, abs_deg: f32, f: f32) -> Color {
+        let lines = render(w, h, angle);
+        let (dw, dh) = (w as usize * 2, h as usize * 4);
+        let (cx, cy) = ((dw as f32 - 1.0) / 2.0, (dh as f32 - 1.0) / 2.0);
+        let rad = (dw.min(dh) as f32) / 2.0 - 1.0;
+        let th = abs_deg.to_radians();
+        let x = cx + f * rad * th.cos();
+        let y = cy + f * rad * th.sin();
+        let (col, row) = (x.round() as usize / 2, y.round() as usize / 4);
+        lines[row].spans[col].style.fg.expect("probed cell should be lit")
+    }
+
+    /// Ray index `k` maps to `theme::TEXT` when even, `theme::ACCENT` when
+    /// odd (see `render`'s `votes[k % 2]` parity vote). A regression that
+    /// made tone assignment contiguous (e.g. "first half TEXT, rest ACCENT")
+    /// or reversed the parity tie-break would still pass
+    /// `rays_alternate_the_two_brand_tones` above, since that test only
+    /// checks that both tones appear SOMEWHERE. Probe two adjacent rays —
+    /// k=0 at 18° and k=1 at 54°, both in the inner ring at angle 0 — and
+    /// pin down which tone each one actually is.
+    #[test]
+    fn adjacent_rays_use_different_alternating_tones() {
+        let ray0 = cell_tone(W, H, 0.0, 18.0, F_IN); // k=0, even -> TEXT
+        let ray1 = cell_tone(W, H, 0.0, 54.0, F_IN); // k=1, odd -> ACCENT
+        assert!(is_blend_of(ray0, theme::TEXT), "ray 0 (even) should be TEXT, got {ray0:?}");
+        assert!(is_blend_of(ray1, theme::ACCENT), "ray 1 (odd) should be ACCENT, got {ray1:?}");
+        assert_ne!(ray0, ray1, "adjacent rays must not share a tone");
+    }
+
     #[test]
     fn empty_cells_are_spaces_and_lit_cells_are_braille() {
         let lines = render(W, H, 0.0);

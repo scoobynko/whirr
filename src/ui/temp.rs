@@ -20,10 +20,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).split(inner);
         let precise = format!("{t:.1}°C");
         let coarse = format!("{t:.0}°C");
-        let hero: Vec<Line> = font::big_text_fit(&precise, &coarse, inner.width)
-            .into_iter()
-            .map(|r| Line::styled(r, Style::default().fg(color)))
-            .collect();
+        let hero = font::hero_lines(&precise, &coarse, inner.width, color);
         f.render_widget(Paragraph::new(hero), rows[0]);
         render_chart(f, rows[1], app, color);
     } else {

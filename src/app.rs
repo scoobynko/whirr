@@ -262,8 +262,14 @@ impl App {
     /// load when the machine has no usable temp sensor.
     pub fn heat(&self) -> f32 {
         match self.medium.as_ref().and_then(|m| m.temp_c) {
-            Some(t) => ((t - 55.0) / 40.0).clamp(0.0, 1.0),
-            None => self.fast.as_ref().map_or(0.0, |f| (f.total_cpu / 100.0).clamp(0.0, 1.0)),
+            // A NaN/infinite sensor read must not survive `clamp` (which
+            // passes NaN through unchanged): `fan_interval` casts heat into a
+            // millisecond duration, and a NaN there saturates to 0ms, spinning
+            // the redraw loop at full speed. Fall back to the no-sensor path.
+            Some(t) if t.is_finite() => ((t - 55.0) / 40.0).clamp(0.0, 1.0),
+            _ => self.fast.as_ref().map_or(0.0, |f| {
+                if f.total_cpu.is_finite() { (f.total_cpu / 100.0).clamp(0.0, 1.0) } else { 0.0 }
+            }),
         }
     }
 
@@ -411,6 +417,24 @@ mod tests {
         assert_eq!(a.heat(), 1.0, "95C is the ceiling");
         a.ingest(Snapshot::Medium(demo_medium(75.0)));
         assert!((a.heat() - 0.5).abs() < 0.01, "75C is halfway");
+    }
+
+    #[test]
+    fn heat_falls_back_to_load_on_non_finite_temp() {
+        // A malformed sensor read (NaN/inf) must not leak into fan_interval,
+        // whose (125.0 - 65.0 * NaN) as u64 saturates to 0ms and would spin
+        // the redraw loop at full speed pinning a core.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut a = App::new(false);
+            a.ingest(Snapshot::Medium(demo_medium(bad)));
+            assert!(a.heat().is_finite(), "{bad} produced non-finite heat");
+            assert_eq!(a.heat(), 0.0, "{bad}: no fast snapshot, falls back to 0.0");
+            assert!(
+                a.fan_interval() >= Duration::from_millis(60),
+                "{bad}: fan_interval collapsed to a busy loop: {:?}",
+                a.fan_interval()
+            );
+        }
     }
 
     #[test]

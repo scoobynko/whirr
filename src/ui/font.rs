@@ -1,4 +1,6 @@
 use ratatui::layout::Rect;
+use ratatui::style::{Color, Style};
+use ratatui::text::Line;
 
 /// 4-row tall-rounded solid glyphs. Rounded shoulders come from `▄▀▀▄`-style
 /// tops and `▀▄▄▀` bottoms; every row of a glyph has equal width.
@@ -14,6 +16,8 @@ fn glyph(c: char) -> [&'static str; 4] {
         '7' => ["▀▀▀█", "  ▄▀", " █  ", " █  "],
         '8' => ["▄▀▀▄", "▀▄▄▀", "█  █", "▀▄▄▀"],
         '9' => ["▄▀▀▄", "█  █", " ▀▀█", "▀▄▄▀"],
+        // Only the bottom row has ink (a low dot) — the top three rows are
+        // intentionally blank, not a missing glyph row.
         '.' => ["  ", "  ", "  ", "▄ "],
         '°' => ["▄▀▄", "▀▄▀", "   ", "   "],
         'C' => ["▄▀▀▄", "█   ", "█   ", "▀▄▄▀"],
@@ -48,6 +52,19 @@ pub fn big_text_fit(precise: &str, coarse: &str, width: u16) -> Vec<String> {
     } else {
         big_text(coarse)
     }
+}
+
+/// The hero-number rendering shared by all four gauge cards: fit `precise`
+/// (falling back to `coarse`) within `width`, then style each row as a
+/// `Line` in `color`. Replaces the hand-rolled
+/// `big_text(...).into_iter().map(|r| Line::styled(r, ...)).collect()` that
+/// used to be duplicated across `cpu.rs`, `memory.rs`, `power.rs` and
+/// `temp.rs`.
+pub fn hero_lines(precise: &str, coarse: &str, width: u16, color: Color) -> Vec<Line<'static>> {
+    big_text_fit(precise, coarse, width)
+        .into_iter()
+        .map(|r| Line::styled(r, Style::default().fg(color)))
+        .collect()
 }
 
 /// Whether a card's inner area has room for a 4-row hero layout: 4 hero
@@ -86,6 +103,26 @@ mod tests {
         assert!(super::hero_fits(r(28, 9)));
         assert!(!super::hero_fits(r(28, 8)));
         assert!(!super::hero_fits(r(27, 9)));
+    }
+
+    #[test]
+    fn hero_lines_wraps_big_text_fit_with_styling() {
+        use ratatui::style::Color;
+
+        let lines = super::hero_lines("41%", "41%", 28, Color::Rgb(1, 2, 3));
+        assert_eq!(lines.len(), 4);
+        for (line, row) in lines.iter().zip(super::big_text("41%")) {
+            assert_eq!(line.spans.len(), 1);
+            assert_eq!(line.spans[0].content, row);
+            assert_eq!(line.style.fg, Some(Color::Rgb(1, 2, 3)));
+        }
+
+        // Falls back to coarse exactly like `big_text_fit` when precise overflows.
+        let fallback = super::hero_lines("100.0°C", "100°C", 28, Color::Rgb(1, 2, 3));
+        let coarse_rows = super::big_text("100°C");
+        for (line, row) in fallback.iter().zip(coarse_rows) {
+            assert_eq!(line.spans[0].content, row);
+        }
     }
 
     #[test]

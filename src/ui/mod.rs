@@ -22,15 +22,20 @@ use crate::app::{App, MAX_VISIBLE_PROCS};
 ///
 /// The body below the gauges splits into a left column (processes stacked
 /// over ports) and a right column (network at full body height). Within the
-/// left column the process table is a `Max`, not a `Length`, capped at
-/// `MAX_VISIBLE_PROCS` rows (+ footer + borders): it only claims that much
-/// space when it's available. At heights below the point where header +
-/// gauges + full process table + ports card (`Min(4)`) all fit, the process
-/// table shrinks gracefully (fewer visible rows) rather than starving the
-/// other panels — ratatui's solver holds `Min` constraints firm ahead of
-/// `Length`, so an over-committed `Length` here would squeeze header/gauges/
-/// ports arbitrarily at common sizes like 80x24. The ports card grows with
-/// available height once the process table has its room.
+/// left column the process table is capped at `MAX_VISIBLE_PROCS` rows (+
+/// footer + borders) via `Max`, paired with a `Min(4)` floor for the ports
+/// card below it: the process table claims up to its cap and ports gets
+/// whatever's left, but never below its floor — so at tight body heights the
+/// process table shrinks (fewer visible rows) while ports keeps its minimum,
+/// and once there's slack beyond both the process table takes its full cap
+/// and ports grows into the rest. (`Length(13)` paired with the same
+/// `Min(4)` produces an identical split in ratatui 0.29 at every body height
+/// tested — `Max` is used here because it documents the "cap, not a fixed
+/// size" intent, not because it behaves differently from `Length` in this
+/// pairing.) Either way, this constraint can only ever move space between
+/// the process table and ports: the header and gauges rows are resolved by
+/// the outer `Layout::split` above, before `render_left_column` is ever
+/// called, so nothing inside it can squeeze them.
 ///
 /// Full visual tier (>=120x30): padded header with the braille burst fan
 /// (9 rows) and hero-number gauge cards (12 rows). Compact tier: standard

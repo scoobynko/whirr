@@ -21,10 +21,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             Constraint::Min(3),    // history chart
         ])
         .split(inner);
-        let hero: Vec<Line> = font::big_text(&format!("{:.0}%", fast.total_cpu))
-            .into_iter()
-            .map(|r| Line::styled(r, Style::default().fg(theme::ACCENT)))
-            .collect();
+        // total_cpu is documented 0..100, so "100%" (the widest case) never
+        // gets close to overflowing a 28-wide card, but big_text_fit guards
+        // it the same way temp.rs/power.rs guard their hero numbers — a
+        // dropped '%' is a narrower, still-legible fallback if that ever
+        // changes.
+        let precise = format!("{:.0}%", fast.total_cpu);
+        let coarse = format!("{:.0}", fast.total_cpu);
+        let hero = font::hero_lines(&precise, &coarse, inner.width, theme::ACCENT);
         f.render_widget(Paragraph::new(hero), rows[0]);
         render_core_strip(f, rows[1], app, &fast.per_core);
         render_history(f, rows[2], app);

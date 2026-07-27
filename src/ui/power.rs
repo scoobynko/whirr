@@ -29,10 +29,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             let text = format!("{total:.1} W");
             if hero {
                 let coarse = format!("{total:.0} W");
-                let lines: Vec<Line> = font::big_text_fit(&text, &coarse, inner.width)
-                    .into_iter()
-                    .map(|r| Line::styled(r, Style::default().fg(theme::ACCENT)))
-                    .collect();
+                let lines = font::hero_lines(&text, &coarse, inner.width, theme::ACCENT);
                 f.render_widget(Paragraph::new(lines), rows[0]);
             } else {
                 f.render_widget(
@@ -54,9 +51,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let battery_line = match &m.battery {
         Some(b) => {
+            // Kept terse ("cyc"/"h" rather than "cycles"/"health") so the
+            // full line — percent, cycles and health — still fits the
+            // narrowest full-tier card (inner width 28 at 120 cols); the
+            // old wording clipped at widths at or below ~124.
             let state = if b.charging { "⚡" } else { "🔋" };
-            let health = b.health_pct.map_or(String::new(), |h| format!(" · health {h}%"));
-            format!("{state} {}% · {} cycles{health}", b.percent, b.cycles)
+            let health = b.health_pct.map_or(String::new(), |h| format!(" · h{h}%"));
+            format!("{state} {}% · {}cyc{health}", b.percent, b.cycles)
         }
         None => String::new(), // desktop Mac: hide line
     };
@@ -104,6 +105,20 @@ mod tests {
         let compact = draw(40, 10); // inner 38x8 → compact
         assert!(compact.contains("7.9 W"));
         assert!(!compact.contains("▀▀▀█"));
+    }
+
+    #[test]
+    fn battery_footer_fits_at_120_width_card() {
+        // Real full-tier card size at 120 total cols with all 4 gauges shown
+        // (120/4=30 wide, inner 28): the old "cycles"/"health" wording
+        // clipped at widths at or below ~124.
+        let full = draw(30, 12);
+        // "⚡" renders as a double-width glyph (an extra cell reserved after
+        // it), hence the two spaces before "76%".
+        assert!(
+            full.contains("⚡  76% · 120cyc · h97%"),
+            "battery footer clipped or missing at inner width 28"
+        );
     }
 
     #[test]
