@@ -1,4 +1,5 @@
 pub mod font;
+pub mod burst;
 pub mod cpu;
 pub mod header;
 pub mod memory;
