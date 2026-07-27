@@ -920,6 +920,8 @@ Expected: PASS — the whole suite, unit and integration.
 
 **This step also carries Task 4's deferred verification.** Task 4 added five tests to `src/app.rs` (`heat_tracks_temperature_and_falls_back_to_load`, `fan_interval_ramps_from_125ms_to_60ms`, `tick_fan_never_turns_a_ring_more_than_eighteen_degrees_per_frame`, `tick_fan_spins_faster_when_hot_and_wraps_at_360`, `cold_fan_takes_about_fourteen_seconds_per_revolution`) that could not be compiled at the time. This is the first point at which they can run. Confirm all five appear in the test output and pass, and quote them in your report. If any fails, fix `src/app.rs` — the failure is Task 4's, not a header bug.
 
+Two further `src/app.rs` tests were repaired during Task 4's review and are likewise unverified — `fan_speed_follows_simulated_thermal_curve` and `fan_speed_falls_back_to_load_without_temp_sensor`. They predate this work and had stale 600 ms / 80 ms expectations from the old fan curve, updated to 125 ms / 60 ms. Confirm these two pass as well and quote them.
+
 - [ ] **Step 5: Run the clippy gate**
 
 Run: `cargo clippy --all-targets -- -D warnings`
