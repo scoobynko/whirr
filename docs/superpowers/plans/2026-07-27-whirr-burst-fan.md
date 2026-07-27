@@ -946,6 +946,60 @@ git commit -m "feat: burst fan fills the full header band"
 - Consumes: everything above.
 - Produces: nothing.
 
+- [ ] **Step 0: Resize the fan to 19×7, centred**
+
+Task 6 built the fan at 21×9, filling the whole header band. Judged too large in an animated three-way comparison against 19×7 and 15×5; **19×7 centred** won. Only `src/ui/header.rs` changes — `burst::render` already scales to whatever rect it is handed.
+
+Replace the `FAN_COLS` constant with:
+
+```rust
+const FAN_COLS: u16 = 19;
+const FAN_ROWS: u16 = 7;
+```
+
+In `render_full`, change the fan column's `Constraint::Length(FAN_COLS)` comment to `// burst fan` (it already uses `FAN_COLS`), and replace the fan render block with:
+
+```rust
+    if !app.no_fan {
+        // The burst sits 19x7 centred in the 9-row band — a blank row above
+        // and below. It scales to whatever rect it is given, so the size lives
+        // here rather than in the rasterizer.
+        let fan = Rect {
+            y: area.y + area.height.saturating_sub(FAN_ROWS) / 2,
+            height: FAN_ROWS.min(area.height),
+            ..cols[1]
+        };
+        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, app.fan_angle_deg)), fan);
+    }
+```
+
+Then replace the `burst_fills_the_whole_nine_row_band` test — it asserted ink in rows 0 and 8, which is now wrong by design — with one that pins the centring instead:
+
+```rust
+    #[test]
+    fn burst_is_centred_in_the_nine_row_band() {
+        let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let row = |y: u16| -> String { (0..80).map(|x| buf[(x, y)].symbol()).collect() };
+        // 19x7 centred in 9 rows: ink reaches rows 1 and 7 (the vertical ray
+        // tips) and rows 0 and 8 stay clear.
+        assert!(has_braille(&row(1)), "no burst ink in header row 1");
+        assert!(has_braille(&row(7)), "no burst ink in header row 7");
+        assert!(!has_braille(&row(0)), "burst should not reach row 0");
+        assert!(!has_braille(&row(8)), "burst should not reach row 8");
+    }
+```
+
+Run: `cargo test && cargo clippy --all-targets -- -D warnings`
+Expected: all green, no warnings.
+
+```bash
+git add src/ui/header.rs
+git commit -m "feat: burst fan sits 19x7 centred in the header band"
+```
+
 - [ ] **Step 1: Run the real binary and watch it**
 
 Run: `cargo run --release`

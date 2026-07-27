@@ -46,8 +46,9 @@ spacing) that it reads as static in any short sample. It is real.
 3. **Braille rasterization + anti-aliasing.** Sub-cell hairlines at true ray
    angles, not directional stroke glyphs. Accepted cost: appearance varies with
    terminal font.
-4. **Full 9-row header band, no padding.** Height is the only lever on burst
-   size (see §2); this is the largest burst achievable at zero layout cost.
+4. **19 × 7 cells, centred in the 9-row header band.** Height is the only lever
+   on burst size (see §2). A full-band 21×9 version was built and judged too
+   large; this leaves a blank row above and below.
 5. **Two-tone alternating rays.** 10 rays alternate TEXT and ACCENT, five each,
    tone travelling with the ray — the existing e2b-style split, which 10
    divides evenly.
@@ -75,11 +76,14 @@ The burst is a circle and the header band is short, so **height is the only
 lever on its size**. Widening the column does nothing: at 27 columns × 8 rows
 the burst is 30 dots wide inside a 54-dot box.
 
-- Fan occupies the **entire existing 9-row header**; the current 1-row top pad
-  and trailing row are dropped. Header height stays 9 — no change to
-  `ui/mod.rs`, no rows taken from the body at the 30-row tier threshold.
-- Fan column widens 19 → **21 cells**. Canvas is 42 × 36 dots.
-- Burst radius **17 dots** (31% larger than today's fan).
+- Fan is **19 × 7 cells, centred in the 9-row header** — one blank row above
+  and below. Header height stays 9 — no change to `ui/mod.rs`, no rows taken
+  from the body at the 30-row tier threshold.
+- Canvas is 38 × 28 dots; burst radius **13 dots**.
+- Sized by eye against the wordmark on 2026-07-27, animated, alongside a 21×9
+  (radius 17, filling the whole band) and a 15×5 (radius 9) candidate. 21×9 was
+  built first and judged too large; 15×5 is past the floor — below roughly
+  radius 10 the two rings merge and the counter-rotation stops reading.
 - Braille dots are approximately square, so the burst rasterizes as a true
   circle with no aspect correction — unlike the current cell-grid fan, which
   needs a 2.2× column stretch.
@@ -88,8 +92,8 @@ the burst is 30 dots wide inside a 54-dot box.
 - **Hairline thickness**: half-thickness 0.75 dots, measured as perpendicular
   distance to the ray, so rays stay one dot wide at every radius.
 
-Logo and facts columns are unchanged and centre vertically against the 9-row
-band.
+Logo and facts stay on the rows they have always occupied (`area.y + 2` and
+`area.y + 3`); only the fan's footprint changed.
 
 ## 3. Two counter-rotating rings
 
