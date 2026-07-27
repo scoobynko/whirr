@@ -180,7 +180,7 @@ core** (measured). The terminal receives only the changed fan cells.
 | `src/app.rs` | Replace `fan_frame: usize` with `fan_angle_deg: f32`. Extract `heat()`. `tick_fan(dt: Duration)` integrates ω(heat) and wraps the angle. `fan_interval()` returns the frame interval (125→60 ms). |
 | `src/main.rs` | Pass real elapsed `dt` to `tick_fan`. |
 | `src/ui/burst.rs` | New: the two-ring braille rasterizer. |
-| `src/ui/header.rs` | Call `burst::render` in place of `render_star_fan`. Band 7→9 rows, pads dropped, fan column 19→21. |
+| `src/ui/header.rs` | Call `burst::render` in place of `render_star_fan`. Fan is 19×7 cells, centred in the existing 9-row header band with a blank row above and below. |
 | `src/ui/theme.rs` | Blend helper for coverage dimming. |
 | `tests/render.rs` | Replace the three `✳` tier assertions with a braille marker check. |
 

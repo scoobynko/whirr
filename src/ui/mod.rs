@@ -32,16 +32,16 @@ use crate::app::{App, MAX_VISIBLE_PROCS};
 /// ports arbitrarily at common sizes like 80x24. The ports card grows with
 /// available height once the process table has its room.
 ///
-/// Full visual tier (>=120x30): padded header with housed fan (7 rows) and
-/// hero-number gauge cards (12 rows). Compact tier: standard header (3 rows)
-/// and compact gauges (10 rows).
+/// Full visual tier (>=120x30): padded header with the braille burst fan
+/// (9 rows) and hero-number gauge cards (12 rows). Compact tier: standard
+/// header (3 rows) and compact gauges (10 rows).
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     let show_ports = area.height >= 20;
     let show_network = area.height >= 16;
     let show_power = area.width >= 70;
     let show_temp = area.width >= 50;
-    // Full visual tier: padded header with rotating star fan, hero-number
+    // Full visual tier: padded header with the braille burst fan, hero-number
     // gauge cards. Needs width for the ~27-col hero strings (4 cards x 30
     // cols) and height for header 9 + gauges 12 + a useful body.
     let full = area.height >= 30 && area.width >= 120;
