@@ -31,9 +31,9 @@ const FAN_FRAMES: [[&str; 3]; 4] = [
 ];
 
 // Full-tier fan: a radial burst of counter-rotating ray halves on a braille
-// dot canvas — see `ui/burst.rs`. It fills the header's full 9 rows; the logo
-// and facts keep the rows they always had, so only the fan grew.
-const FAN_COLS: u16 = 21;
+// dot canvas — see `ui/burst.rs`.
+const FAN_COLS: u16 = 19;
+const FAN_ROWS: u16 = 7;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Full tier needs 9 rows: 1 (top pad) + 7 (band, sized to the fan) +
@@ -46,9 +46,6 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_full(f: &mut Frame, area: Rect, app: &App) {
-    // The burst claims the whole 9-row header. The logo and facts stay on the
-    // rows they occupied when the band was 7 rows with a pad above, so this
-    // change is invisible to everything except the fan.
     let cols = Layout::horizontal([
         Constraint::Length(26),       // logo
         Constraint::Length(FAN_COLS), // burst fan
@@ -64,8 +61,15 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(logo_lines), logo_area);
 
     if !app.no_fan {
-        let lines = burst::render(cols[1].width, cols[1].height, app.fan_angle_deg);
-        f.render_widget(Paragraph::new(lines), cols[1]);
+        // The burst sits 19x7 centred in the 9-row band — a blank row above
+        // and below. It scales to whatever rect it is given, so the size lives
+        // here rather than in the rasterizer.
+        let fan = Rect {
+            y: area.y + area.height.saturating_sub(FAN_ROWS) / 2,
+            height: FAN_ROWS.min(area.height),
+            ..cols[1]
+        };
+        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, app.fan_angle_deg)), fan);
     }
 
     let facts_area = Rect {
@@ -175,16 +179,18 @@ mod tests {
     }
 
     #[test]
-    fn burst_fills_the_whole_nine_row_band() {
+    fn burst_is_centred_in_the_nine_row_band() {
         let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
         let app = App::demo();
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let buf = t.backend().buffer().clone();
-        // The vertical rays reach the top and bottom rows of the header.
-        for y in [0u16, 8] {
-            let row: String = (0..80).map(|x| buf[(x, y)].symbol()).collect();
-            assert!(has_braille(&row), "no burst ink in header row {y}");
-        }
+        let row = |y: u16| -> String { (0..80).map(|x| buf[(x, y)].symbol()).collect() };
+        // 19x7 centred in 9 rows: ink reaches rows 1 and 7 (the vertical ray
+        // tips) and rows 0 and 8 stay clear.
+        assert!(has_braille(&row(1)), "no burst ink in header row 1");
+        assert!(has_braille(&row(7)), "no burst ink in header row 7");
+        assert!(!has_braille(&row(0)), "burst should not reach row 0");
+        assert!(!has_braille(&row(8)), "burst should not reach row 8");
     }
 
     #[test]
