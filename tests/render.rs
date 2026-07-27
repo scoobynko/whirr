@@ -11,6 +11,10 @@ fn draw_at(w: u16, h: u16) -> String {
     buf.content().iter().map(|c| c.symbol()).collect()
 }
 
+fn has_braille(s: &str) -> bool {
+    s.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c))
+}
+
 #[test]
 fn renders_at_all_sizes_without_panic() {
     for (w, h) in [(200, 50), (120, 40), (80, 24), (60, 15), (20, 5)] {
@@ -91,9 +95,9 @@ fn ports_card_sits_under_processes_not_full_width() {
 }
 
 #[test]
-fn full_tier_shows_hero_font_and_star_fan() {
+fn full_tier_shows_hero_font_and_burst_fan() {
     let c = draw_at(160, 45);
-    assert!(c.contains("✳"), "star fan missing");
+    assert!(has_braille(&c), "burst fan missing");
     assert!(c.contains("█ ▄ █"), "4-row logo W missing");
     assert!(c.contains("▄  █"), "cpu hero '4' glyph missing"); // total_cpu 41 → "41%"
     assert!(c.contains("█  ▄▀"), "hero '%' glyph missing");
@@ -102,14 +106,14 @@ fn full_tier_shows_hero_font_and_star_fan() {
 #[test]
 fn compact_tier_keeps_old_visuals() {
     let c = draw_at(80, 24);
-    assert!(!c.contains("✳"), "star fan must not render at 80x24");
+    assert!(!has_braille(&c), "burst fan must not render at 80x24");
     assert!(!c.contains("█ ▄ █"), "4-row logo must not render at 80x24");
     assert!(c.contains("88.0°C"), "compact temp readout missing");
 }
 
 #[test]
 fn tier_boundary_is_exactly_120x30() {
-    assert!(draw_at(120, 30).contains("✳"), "120x30 must be full tier");
-    assert!(!draw_at(119, 30).contains("✳"), "119x30 must be compact");
-    assert!(!draw_at(120, 29).contains("✳"), "120x29 must be compact");
+    assert!(has_braille(&draw_at(120, 30)), "120x30 must be full tier");
+    assert!(!has_braille(&draw_at(119, 30)), "119x30 must be compact");
+    assert!(!has_braille(&draw_at(120, 29)), "120x29 must be compact");
 }
