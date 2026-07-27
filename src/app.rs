@@ -248,7 +248,14 @@ impl App {
         const COLD_DPS: f32 = 360.0 / 14.0;
         const HOT_DPS: f32 = 360.0 / 2.0;
         let dps = COLD_DPS + (HOT_DPS - COLD_DPS) * self.heat();
-        self.fan_angle_deg = (self.fan_angle_deg + dps * dt.as_secs_f32()).rem_euclid(360.0);
+        // Each ring is 10-fold symmetric, so a step of 18 deg or more aliases
+        // into a backwards spin. dt is measured, not nominal, and heat can rise
+        // between the sleep and the tick, so the step is clamped rather than
+        // assumed small. Losing a few degrees after a stall is invisible; a
+        // backwards jump is not.
+        const MAX_STEP: f32 = 17.0;
+        let step = (dps * dt.as_secs_f32()).min(MAX_STEP);
+        self.fan_angle_deg = (self.fan_angle_deg + step).rem_euclid(360.0);
         self.dirty = true;
     }
 }
@@ -397,6 +404,23 @@ mod tests {
                 a.fan_angle_deg
             );
         }
+
+        // Adversarial: dt is measured, not nominal, and heat can change
+        // between the sleep and the tick (main.rs ingests a new sample before
+        // calling tick_fan). At max heat, an unclamped step blows well past
+        // 18 deg for a cold-cadence dt (the real-world trigger), and further
+        // still for a stalled loop. The clamp must hold regardless of dt.
+        for dt in [Duration::from_millis(125), Duration::from_secs(1), Duration::from_secs(10)] {
+            let mut a = App::new(false);
+            a.ingest(Snapshot::Medium(demo_medium(95.0)));
+            a.fan_angle_deg = 100.0;
+            a.tick_fan(dt);
+            let delta = (a.fan_angle_deg - 100.0).rem_euclid(360.0);
+            assert!(
+                delta < 18.0,
+                "max heat with dt={dt:?} turned {delta}deg in one frame — aliases"
+            );
+        }
     }
 
     #[test]
@@ -421,7 +445,12 @@ mod tests {
     fn cold_fan_takes_about_fourteen_seconds_per_revolution() {
         let mut a = App::new(false);
         a.ingest(Snapshot::Medium(demo_medium(40.0)));
-        a.tick_fan(Duration::from_secs(1));
+        // One second of real ticks at the cold cadence (125ms), matching how
+        // main.rs actually drives tick_fan — a single 1s dt would itself
+        // exceed the per-frame clamp and no longer measure the rate.
+        for _ in 0..8 {
+            a.tick_fan(Duration::from_millis(125));
+        }
         // 360/14 = 25.7 deg/s
         assert!((a.fan_angle_deg - 25.7).abs() < 0.5, "got {} deg/s", a.fan_angle_deg);
     }
