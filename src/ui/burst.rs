@@ -147,21 +147,28 @@ pub(crate) mod tests {
     const F_IN: f32 = 0.42;
     const F_OUT: f32 = 0.84;
 
-    fn ink(angle: f32) -> usize {
-        coverage(W, H, angle).iter().flatten().filter(|(c, _)| *c > 0.0).count()
+    /// The geometry tests below run at both sizes the app actually ships:
+    /// 21x9 (radius 17, the old full-band candidate, still exercised as a
+    /// sanity check) and 19x7 (radius 13, what `ui/header.rs` renders today).
+    /// The rasterizer is designed to be size-independent, so the contract is
+    /// checked at both rather than swapping constants.
+    const SIZES: [(u16, u16); 2] = [(21, 9), (19, 7)];
+
+    fn ink(w: u16, h: u16, angle: f32) -> usize {
+        coverage(w, h, angle).iter().flatten().filter(|(c, _)| *c > 0.0).count()
     }
 
     /// Coverage at the dot nearest an absolute polar position. `abs_deg` is a
     /// screen angle in the same convention the rasterizer uses (atan2 with y
     /// growing downward), NOT a ring-relative one.
-    fn probe(angle: f32, abs_deg: f32, f: f32) -> f32 {
-        let (dw, dh) = (W as usize * 2, H as usize * 4);
+    fn probe(w: u16, h: u16, angle: f32, abs_deg: f32, f: f32) -> f32 {
+        let (dw, dh) = (w as usize * 2, h as usize * 4);
         let (cx, cy) = ((dw as f32 - 1.0) / 2.0, (dh as f32 - 1.0) / 2.0);
         let rad = (dw.min(dh) as f32) / 2.0 - 1.0;
         let th = abs_deg.to_radians();
         let x = cx + f * rad * th.cos();
         let y = cy + f * rad * th.sin();
-        coverage(W, H, angle)[y.round() as usize][x.round() as usize].0
+        coverage(w, h, angle)[y.round() as usize][x.round() as usize].0
     }
 
     #[test]
@@ -169,78 +176,127 @@ pub(crate) mod tests {
         // A non-zero angle, so the two rings are genuinely offset from each
         // other and a bug that ignored one ring's sign would show up.
         let rot = 12.0;
-        for k in 0..10 {
-            let step = 36.0 * k as f32;
-            let inner = rot + 18.0 + step;
-            let outer = -rot + 18.0 + step;
-            assert!(probe(rot, inner, F_IN) > 0.0, "inner ray {k} missing at {inner}°");
-            assert!(probe(rot, outer, F_OUT) > 0.0, "outer ray {k} missing at {outer}°");
-            // Exactly halfway between two rays must be empty in both rings.
-            assert_eq!(probe(rot, inner + 18.0, F_IN), 0.0, "ink between inner rays");
-            assert_eq!(probe(rot, outer + 18.0, F_OUT), 0.0, "ink between outer rays");
+        for (w, h) in SIZES {
+            for k in 0..10 {
+                let step = 36.0 * k as f32;
+                let inner = rot + 18.0 + step;
+                let outer = -rot + 18.0 + step;
+                assert!(
+                    probe(w, h, rot, inner, F_IN) > 0.0,
+                    "{w}x{h}: inner ray {k} missing at {inner}°"
+                );
+                assert!(
+                    probe(w, h, rot, outer, F_OUT) > 0.0,
+                    "{w}x{h}: outer ray {k} missing at {outer}°"
+                );
+                // Exactly halfway between two rays must read below the
+                // lit-dot threshold in both rings. `probe` rounds its target
+                // to the nearest dot (up to 0.71 dots of error), so at small
+                // radii the nominally-empty point can land on a dot with
+                // sub-threshold coverage rather than exactly 0.0 — DOT_ON is
+                // what "not lit" actually means here.
+                assert!(
+                    probe(w, h, rot, inner + 18.0, F_IN) < DOT_ON,
+                    "{w}x{h}: ink between inner rays"
+                );
+                assert!(
+                    probe(w, h, rot, outer + 18.0, F_OUT) < DOT_ON,
+                    "{w}x{h}: ink between outer rays"
+                );
+            }
         }
     }
 
     #[test]
     fn the_band_between_the_rings_is_never_lit() {
-        let (dw, dh) = (W as usize * 2, H as usize * 4);
-        let (cx, cy) = ((dw as f32 - 1.0) / 2.0, (dh as f32 - 1.0) / 2.0);
-        let rad = (dw.min(dh) as f32) / 2.0 - 1.0;
-        // Supersample offsets reach ~0.02 in f, so allow a hair of slop.
-        const SLOP: f32 = 0.03;
-        let mut saw_inner = false;
-        let mut saw_outer = false;
-        for (j, row) in coverage(W, H, 7.0).iter().enumerate() {
-            for (i, (c, _)) in row.iter().enumerate() {
-                if *c == 0.0 {
-                    continue;
-                }
-                let f = ((i as f32 - cx).powi(2) + (j as f32 - cy).powi(2)).sqrt() / rad;
-                assert!(f >= HUB - SLOP, "ink at f={f} inside the hub");
-                assert!(f <= 1.0 + SLOP, "ink at f={f} beyond the rim");
-                assert!(
-                    f <= INNER_END + SLOP || f >= OUTER_START - SLOP,
-                    "ink at f={f} in the gap between the rings"
-                );
-                if f < INNER_END {
-                    saw_inner = true;
-                }
-                if f > OUTER_START {
-                    saw_outer = true;
+        for (w, h) in SIZES {
+            let (dw, dh) = (w as usize * 2, h as usize * 4);
+            let (cx, cy) = ((dw as f32 - 1.0) / 2.0, (dh as f32 - 1.0) / 2.0);
+            let rad = (dw.min(dh) as f32) / 2.0 - 1.0;
+            // Supersample offsets and dot-centre error are both fractions of
+            // a dot, so the slop shrinks as the radius (in dots) grows —
+            // fixed at ~0.03 that's calibrated for radius 17 and too tight at
+            // radius 13.
+            let slop = 0.5 / rad;
+            let mut saw_inner = false;
+            let mut saw_outer = false;
+            for (j, row) in coverage(w, h, 7.0).iter().enumerate() {
+                for (i, (c, _)) in row.iter().enumerate() {
+                    if *c == 0.0 {
+                        continue;
+                    }
+                    let f = ((i as f32 - cx).powi(2) + (j as f32 - cy).powi(2)).sqrt() / rad;
+                    assert!(f >= HUB - slop, "{w}x{h}: ink at f={f} inside the hub");
+                    assert!(f <= 1.0 + slop, "{w}x{h}: ink at f={f} beyond the rim");
+                    assert!(
+                        f <= INNER_END + slop || f >= OUTER_START - slop,
+                        "{w}x{h}: ink at f={f} in the gap between the rings"
+                    );
+                    if f < INNER_END {
+                        saw_inner = true;
+                    }
+                    if f > OUTER_START {
+                        saw_outer = true;
+                    }
                 }
             }
+            assert!(saw_inner, "{w}x{h}: inner ring drew nothing");
+            assert!(saw_outer, "{w}x{h}: outer ring drew nothing");
         }
-        assert!(saw_inner, "inner ring drew nothing");
-        assert!(saw_outer, "outer ring drew nothing");
     }
 
     #[test]
     fn the_rings_rotate_in_opposite_directions() {
-        // At angle 0 both rings put a ray at 18 degrees.
-        assert!(probe(0.0, 18.0, F_IN) > 0.0);
-        assert!(probe(0.0, 18.0, F_OUT) > 0.0);
-        // Advance 9 degrees: the inner ray must move to 27, the outer to 9.
-        assert!(probe(9.0, 27.0, F_IN) > 0.0, "inner ring did not advance");
-        assert!(probe(9.0, 9.0, F_OUT) > 0.0, "outer ring did not retreat");
-        // And emphatically not the other way round. 9 and 27 are each exactly
-        // halfway between the wrong ring's rays, so these must be empty.
-        assert_eq!(probe(9.0, 9.0, F_IN), 0.0, "inner ring rotated backwards");
-        assert_eq!(probe(9.0, 27.0, F_OUT), 0.0, "outer ring rotated forwards");
+        for (w, h) in SIZES {
+            // At angle 0 both rings put a ray at 18 degrees.
+            assert!(probe(w, h, 0.0, 18.0, F_IN) > 0.0, "{w}x{h}");
+            assert!(probe(w, h, 0.0, 18.0, F_OUT) > 0.0, "{w}x{h}");
+            // Advance 9 degrees: the inner ray must move to 27, the outer to 9.
+            assert!(
+                probe(w, h, 9.0, 27.0, F_IN) > 0.0,
+                "{w}x{h}: inner ring did not advance"
+            );
+            assert!(
+                probe(w, h, 9.0, 9.0, F_OUT) > 0.0,
+                "{w}x{h}: outer ring did not retreat"
+            );
+            // And emphatically not the other way round. 9 and 27 are each
+            // exactly halfway between the wrong ring's rays, so these must be
+            // empty.
+            assert_eq!(
+                probe(w, h, 9.0, 9.0, F_IN),
+                0.0,
+                "{w}x{h}: inner ring rotated backwards"
+            );
+            assert_eq!(
+                probe(w, h, 9.0, 27.0, F_OUT),
+                0.0,
+                "{w}x{h}: outer ring rotated forwards"
+            );
+        }
     }
 
     #[test]
     fn rotation_never_collapses_the_burst() {
-        let base = ink(0.0);
-        let mut differed = 0;
-        for d in 0..360 {
-            let n = ink(d as f32);
-            assert!(n > 0, "burst empty at {d}°");
-            assert!(n as f32 > base as f32 * 0.4, "burst collapsed to {n} dots at {d}°");
-            if n != base {
-                differed += 1;
+        for (w, h) in SIZES {
+            let base = ink(w, h, 0.0);
+            let mut differed = 0;
+            for d in 0..360 {
+                let n = ink(w, h, d as f32);
+                assert!(n > 0, "{w}x{h}: burst empty at {d}°");
+                assert!(
+                    n as f32 > base as f32 * 0.4,
+                    "{w}x{h}: burst collapsed to {n} dots at {d}°"
+                );
+                if n != base {
+                    differed += 1;
+                }
             }
+            assert!(
+                differed > 100,
+                "{w}x{h}: rotation barely changes the figure ({differed} of 360)"
+            );
         }
-        assert!(differed > 100, "rotation barely changes the figure ({differed} of 360)");
     }
 
     /// Is `fg` somewhere on the blend line from `BG_CELL` toward `tone`?
