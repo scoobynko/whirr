@@ -410,7 +410,10 @@ mod tests {
         // calling tick_fan). At max heat, an unclamped step blows well past
         // 18 deg for a cold-cadence dt (the real-world trigger), and further
         // still for a stalled loop. The clamp must hold regardless of dt.
-        for dt in [Duration::from_millis(125), Duration::from_secs(1), Duration::from_secs(10)] {
+        // Note: each duration must have an unclamped step that is NOT a
+        // multiple of 360°, else rem_euclid(360.0) wraps it to zero and the
+        // assertion passes vacuously even without the clamp.
+        for dt in [Duration::from_millis(125), Duration::from_secs(1), Duration::from_secs(7)] {
             let mut a = App::new(false);
             a.ingest(Snapshot::Medium(demo_medium(95.0)));
             a.fan_angle_deg = 100.0;
