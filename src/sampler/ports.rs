@@ -18,7 +18,7 @@ use super::PortInfo;
 /// the resolved binary, so on current installs it is a stable `~/.local/bin/claude`
 /// rather than a versioned path. Accept both shapes: the current launcher
 /// (file name exactly `claude`) and the older versioned layout.
-fn is_claude(exec_path: &str) -> bool {
+pub(crate) fn is_claude(exec_path: &str) -> bool {
     Path::new(exec_path).file_name().is_some_and(|n| n == "claude")
         || exec_path.contains("/claude/versions/")
 }
