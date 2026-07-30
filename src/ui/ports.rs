@@ -104,10 +104,11 @@ fn range_cost(rows: &[&PortRow], start: usize, end: usize, headers: bool) -> usi
     cost
 }
 
-/// Shared row renderer. `rows` is already filtered and ordered; `headers`
-/// controls whether group header lines are emitted (only the combined
-/// fallback card wants them — a single-group card's title already says which
-/// group it is).
+/// Shared row renderer. `rows` is already filtered and ordered; `combined`
+/// indicates whether the card holds multiple groups (only then do headers
+/// and group markers make sense); `headers` controls whether group header
+/// lines are emitted (combined cards with enough height use them).
+#[allow(clippy::too_many_arguments)]
 fn render_rows(
     f: &mut Frame,
     area: Rect,
@@ -115,6 +116,7 @@ fn render_rows(
     title: &str,
     focused: bool,
     rows: &[&PortRow],
+    combined: bool,
     headers: bool,
 ) {
     let stale = app.slow.as_ref().is_some_and(|s| s.stale);
@@ -138,7 +140,8 @@ fn render_rows(
     // Headers cost a row each, which the compact tier cannot spare; there it
     // uses a per-row marker instead. 8 rows of inner height is the threshold —
     // below that, the 80x24 layout gives this card only two content rows.
-    let headers = headers && inner.height >= 8;
+    // Headers only apply to combined cards; single-group cards have a title.
+    let headers = combined && headers && inner.height >= 8;
     let visible_rows = inner.height as usize;
     // The offset search's loop condition `range_cost(offset..=selected, headers) > visible_rows`
     // only ever terminates because a single selected row plus its own header is guaranteed to
@@ -190,8 +193,9 @@ fn render_rows(
         };
         let mut spans: Vec<Span> = Vec::new();
         let mut prefix_width = 0usize;
-        if !headers {
+        if combined && !headers {
             // Marker carries the group when there is no header to do it.
+            // Only shown in combined cards; single-group cards use their title instead.
             let (glyph, colour) = match r.group {
                 PortGroup::Localhost => ("●", theme::ACCENT),
                 PortGroup::Claude => ("○", theme::TEXT),
@@ -273,19 +277,19 @@ fn render_rows(
 /// Dev servers. Killable; see `App::on_key`.
 pub fn render_localhost(f: &mut Frame, area: Rect, app: &App) {
     let rows = app.localhost_rows();
-    render_rows(f, area, app, "localhost", matches!(app.focus, Focus::Localhost), &rows, false);
+    render_rows(f, area, app, "localhost", matches!(app.focus, Focus::Localhost), &rows, false, false);
 }
 
 /// Background agents and apps.
 pub fn render_others(f: &mut Frame, area: Rect, app: &App) {
     let rows = app.other_rows();
-    render_rows(f, area, app, "others", matches!(app.focus, Focus::Others), &rows, false);
+    render_rows(f, area, app, "others", matches!(app.focus, Focus::Others), &rows, false, false);
 }
 
 /// Narrow-terminal fallback: all groups in one card, with headers.
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let rows: Vec<&PortRow> = app.slow.as_ref().map(|s| s.rows.iter().collect()).unwrap_or_default();
-    render_rows(f, area, app, "Ports", matches!(app.focus, Focus::Localhost), &rows, true);
+    render_rows(f, area, app, "Ports", matches!(app.focus, Focus::Localhost), &rows, true, true);
 }
 
 #[cfg(test)]
@@ -414,6 +418,38 @@ mod tests {
         let rows = draw(46, 6).join("\n");
         assert!(!rows.contains("localhost"), "compact must not render group headers");
         assert!(rows.contains('●'), "compact needs a localhost marker");
+    }
+
+    #[test]
+    fn single_group_card_has_no_markers() {
+        // Single-group cards (localhost/others) should never render group markers
+        // because the card's title already identifies the group.
+        use ratatui::backend::TestBackend;
+        use ratatui::Terminal;
+
+        let rows = vec![PortRow {
+            group: PortGroup::Localhost,
+            label: "web".into(),
+            pid: 601,
+            ports: vec![3000],
+        }];
+        let app = app_with_rows(rows, 0);
+
+        // Test render_localhost at compact height (6 rows)
+        let mut t = Terminal::new(TestBackend::new(46, 6)).unwrap();
+        t.draw(|f| super::render_localhost(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let mut text = String::new();
+        for y in 0..6u16 {
+            for x in 0..46u16 {
+                text.push_str(buf[(x, y)].symbol());
+            }
+            text.push('\n');
+        }
+        assert!(
+            !text.contains('●') && !text.contains("○"),
+            "single-group card should not render markers: {text}"
+        );
     }
 
     /// Every `:NNNN` token in `line`, in order — a severed port would show
