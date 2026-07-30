@@ -11,9 +11,12 @@ use crate::sampler::{
     Snapshot,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Processes,
-    Ports,
+    Localhost,
+    Sessions,
+    Others,
 }
 
 pub enum SortBy {
@@ -210,7 +213,9 @@ impl App {
     fn focused_len(&self) -> usize {
         match self.focus {
             Focus::Processes => self.visible_processes().len(),
-            Focus::Ports => self.slow.as_ref().map_or(0, |s| s.rows.len()),
+            Focus::Localhost => self.localhost_rows().len(),
+            Focus::Sessions => self.sessions().len(),
+            Focus::Others => self.other_rows().len(),
         }
     }
 
@@ -228,6 +233,24 @@ impl App {
     /// the fast tick. Unlike `visible_processes`, this searches the full list.
     pub fn cpu_of(&self, pid: i32) -> Option<f32> {
         self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
+    }
+
+    /// Port rows belonging to the localhost card.
+    pub fn localhost_rows(&self) -> Vec<&PortRow> {
+        self.rows_in(PortGroup::Localhost)
+    }
+
+    /// Port rows belonging to the others card.
+    pub fn other_rows(&self) -> Vec<&PortRow> {
+        self.rows_in(PortGroup::Other)
+    }
+
+    fn rows_in(&self, g: PortGroup) -> Vec<&PortRow> {
+        self.slow.as_ref().map(|s| s.rows.iter().filter(|r| r.group == g).collect()).unwrap_or_default()
+    }
+
+    pub fn sessions(&self) -> &[ClaudeSession] {
+        self.slow.as_ref().map_or(&[], |s| &s.sessions)
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -262,8 +285,10 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Tab => {
                 self.focus = match self.focus {
-                    Focus::Processes => Focus::Ports,
-                    Focus::Ports => Focus::Processes,
+                    Focus::Processes => Focus::Localhost,
+                    Focus::Localhost => Focus::Sessions,
+                    Focus::Sessions => Focus::Others,
+                    Focus::Others => Focus::Processes,
                 };
                 self.selected = 0;
             }
@@ -285,21 +310,16 @@ impl App {
                         self.pending_kill = Some((p.pid, p.name.clone()));
                     }
                 }
-                // Only dev servers are killable. Ending a Claude session
-                // mid-conversation or a system agent by a stray keypress is
-                // not a thing this should make easy.
-                Focus::Ports => {
-                    if let Some(r) = self
-                        .slow
-                        .as_ref()
-                        .and_then(|s| s.rows.get(self.selected))
-                        .filter(|r| r.group == crate::sampler::ports::PortGroup::Localhost)
-                    {
+                // Only dev servers are killable. Sessions and system agents are
+                // deliberately not one keypress from termination.
+                Focus::Localhost => {
+                    if let Some(r) = self.localhost_rows().get(self.selected) {
                         let n = r.ports.len();
                         let ports = if n == 1 { "port" } else { "ports" };
                         self.pending_kill = Some((r.pid, format!("{} ({n} {ports})", r.label)));
                     }
                 }
+                Focus::Sessions | Focus::Others => {}
             },
             _ => {}
         }
@@ -604,8 +624,8 @@ mod tests {
     #[test]
     fn kill_works_on_a_localhost_port_row() {
         let mut a = App::demo();
-        a.focus = Focus::Ports;
-        a.selected = 0; // demo()'s first row is localhost/glassbook-frontend
+        a.focus = Focus::Localhost;
+        a.selected = 0; // demo()'s first localhost row is glassbook-frontend
         press(&mut a, 'k');
         let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
         assert_eq!(pid, 501);
@@ -615,16 +635,66 @@ mod tests {
 
     #[test]
     fn kill_is_inert_on_claude_and_other_rows() {
-        for idx in [2usize, 4] {
-            // demo() row 2 is a claude session, row 4 is ControlCenter.
+        for focus in [Focus::Sessions, Focus::Others] {
             let mut a = App::demo();
-            a.focus = Focus::Ports;
-            a.selected = idx;
+            a.focus = focus;
+            a.selected = 0;
             press(&mut a, 'k');
             assert!(
                 a.pending_kill.is_none(),
-                "row {idx} must not be killable — a stray k must not end a session or a system agent"
+                "{focus:?} must not be killable — a stray k must not end a session or a system agent"
             );
         }
+    }
+
+    #[test]
+    fn tab_cycles_all_four_panels_and_wraps() {
+        let mut a = App::demo();
+        let seen = |a: &App| format!("{:?}", a.focus);
+        let mut order = vec![seen(&a)];
+        for _ in 0..4 {
+            a.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            order.push(seen(&a));
+        }
+        assert_eq!(
+            order,
+            vec!["Processes", "Localhost", "Sessions", "Others", "Processes"],
+            "Tab must visit every focusable panel and wrap"
+        );
+    }
+
+    #[test]
+    fn each_card_reports_its_own_row_count() {
+        let a = App::demo();
+        // demo(): 2 localhost rows, 1 other row, 4 sessions.
+        assert_eq!(a.localhost_rows().len(), 2);
+        assert_eq!(a.other_rows().len(), 1);
+        assert_eq!(a.sessions().len(), 4);
+    }
+
+    #[test]
+    fn kill_is_inert_on_sessions_and_others() {
+        for focus in ["Sessions", "Others"] {
+            let mut a = App::demo();
+            a.focus = if focus == "Sessions" { Focus::Sessions } else { Focus::Others };
+            a.selected = 0;
+            a.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+            assert!(
+                a.pending_kill.is_none(),
+                "{focus} must not be killable — ending a session mid-conversation \
+                 or killing a system agent must not be one keypress away"
+            );
+        }
+    }
+
+    #[test]
+    fn kill_still_works_on_a_localhost_row() {
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.selected = 0;
+        a.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
+        assert_eq!(pid, 501);
+        assert!(label.contains("glassbook-frontend") && label.contains('3'), "got {label}");
     }
 }
