@@ -7,15 +7,21 @@
 //! `docs/superpowers/specs/2026-07-30-whirr-grouped-ports-design.md`.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::PortInfo;
 
 /// Claude Code installs versioned binaries under this path fragment, so the
 /// executable name itself is a version number ("2.1.220") and useless as a
-/// label. If Claude ever moves, sessions fall back to `Localhost` — they run in
-/// git repos — which `claude_path_shape_is_pinned` is there to make visible.
-const CLAUDE_PATH: &str = "/claude/versions/";
+/// label — that's why detection keys on `exec_path` instead. `exec_path` is
+/// the launcher path the user actually invoked (from `KERN_PROCARGS2`), not
+/// the resolved binary, so on current installs it is a stable `~/.local/bin/claude`
+/// rather than a versioned path. Accept both shapes: the current launcher
+/// (file name exactly `claude`) and the older versioned layout.
+fn is_claude(exec_path: &str) -> bool {
+    Path::new(exec_path).file_name().is_some_and(|n| n == "claude")
+        || exec_path.contains("/claude/versions/")
+}
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PortGroup {
@@ -56,7 +62,7 @@ pub struct ProcFacts {
 
 /// Claude wins over Localhost: sessions also run inside git repositories.
 pub fn classify(facts: &ProcFacts) -> PortGroup {
-    if facts.exec_path.as_deref().is_some_and(|p| p.contains(CLAUDE_PATH)) {
+    if facts.exec_path.as_deref().is_some_and(is_claude) {
         return PortGroup::Claude;
     }
     // `is_git` is meaningless without a cwd to have tested.
@@ -209,12 +215,31 @@ mod tests {
     }
 
     #[test]
-    fn claude_path_shape_is_pinned() {
-        // If Claude Code changes where versioned binaries live, this test fails
-        // loudly instead of sessions silently reclassifying as Localhost.
-        assert_eq!(CLAUDE_PATH, "/claude/versions/");
-        let real = "/Users/me/.local/share/claude/versions/2.1.220";
-        assert!(real.contains(CLAUDE_PATH), "observed layout must still match");
+    fn claude_path_shapes_are_pinned_to_real_observed_paths() {
+        // These are real paths, not hand-written assumptions: the first is the
+        // current launcher install that was silently falling through to
+        // Localhost before this fix; the second is the older versioned layout.
+        assert!(is_claude("/Users/j.salmik/.local/bin/claude"));
+        assert!(is_claude("/Users/me/.local/share/claude/versions/2.1.187"));
+
+        // Negative cases proving the rule is not over-broad: a file name that
+        // merely contains "claude" as a substring must not match.
+        assert!(!is_claude("/usr/local/bin/claude-helper"));
+        assert!(!is_claude("/opt/notclaude"));
+    }
+
+    #[test]
+    fn a_claude_session_in_a_git_repo_classifies_as_claude_not_localhost() {
+        // Reproduces the live-machine bug: exec_path is the invoked launcher
+        // path (~/.local/bin/claude), and the session's cwd is a git repo, so
+        // the old `/claude/versions/` substring rule fell through to
+        // Localhost and the Claude group rendered empty.
+        let f = facts(
+            Some("/Users/j.salmik/.local/bin/claude"),
+            Some("/Users/j.salmik/Documents/Projects/axterio"),
+            true,
+        );
+        assert_eq!(classify(&f), PortGroup::Claude);
     }
 
     #[test]
