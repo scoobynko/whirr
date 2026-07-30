@@ -88,6 +88,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // below that, the 80x24 layout gives this card only two content rows.
     let headers = inner.height >= 8;
     let visible_rows = inner.height as usize;
+    // The offset search's guard `offset < selected` relies on range_cost(offset..=selected)
+    // always fitting a header plus its row within visible_rows. This holds only because both
+    // headers and visible_rows are derived from inner.height: when headers=true, inner.height>=8
+    // guarantees visible_rows>=8, so a header+row always fits. If these are later decoupled
+    // (e.g. intermediate tier, reserved row), this assertion will catch the dependency break.
+    debug_assert!(!headers || visible_rows >= 2);
     let offset = if focused {
         let selected = app.selected.min(slow.rows.len().saturating_sub(1));
         let mut offset = 0;
