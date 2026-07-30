@@ -1,9 +1,8 @@
 use ratatui::prelude::*;
-use ratatui::symbols::Marker;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use super::theme;
+use super::{font, theme};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let block = theme::panel_block("Temp", false);
@@ -17,28 +16,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
     let color = theme::temp_color(t);
 
-    let cols = Layout::horizontal([Constraint::Length(3), Constraint::Min(4)]).split(inner);
-    render_thermometer(f, cols[0], t, color);
+    if font::hero_fits(inner) {
+        let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).split(inner);
+        let precise = format!("{t:.1}°C");
+        let coarse = format!("{t:.0}°C");
+        let hero = font::hero_lines(&precise, &coarse, inner.width, color);
+        f.render_widget(Paragraph::new(hero), rows[0]);
+        render_chart(f, rows[1], app, color);
+    } else {
+        let cols = Layout::horizontal([Constraint::Length(3), Constraint::Min(4)]).split(inner);
+        render_thermometer(f, cols[0], t, color);
 
-    let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(cols[1]);
-    f.render_widget(
-        Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
-        rows[0],
-    );
-    let points: Vec<(f64, f64)> = app
-        .temp_hist
-        .iter()
-        .enumerate()
-        .map(|(i, v)| (i as f64, f64::from(v)))
-        .collect();
-    let chart = Chart::new(vec![Dataset::default()
-        .marker(Marker::Braille)
-        .graph_type(GraphType::Line)
-        .style(Style::default().fg(color))
-        .data(&points)])
-    .x_axis(Axis::default().bounds([0.0, 59.0]))
-    .y_axis(Axis::default().bounds([30.0, 105.0]));
-    f.render_widget(chart, rows[1]);
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(cols[1]);
+        f.render_widget(
+            Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
+            rows[0],
+        );
+        render_chart(f, rows[1], app, color);
+    }
 }
 
 fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
@@ -58,13 +53,96 @@ fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
     f.render_widget(Paragraph::new(lines), area);
 }
 
+fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
+    // Baseline-shift 30→105 °C onto 0→75 so the idle-to-hot band uses the full
+    // bar height instead of hugging the top.
+    let data: Vec<u64> = app
+        .temp_hist
+        .iter()
+        .map(|v| (v - 30.0).clamp(0.0, 75.0).round() as u64)
+        .collect();
+    super::spark::render(f, area, &data, 75, Style::default().fg(color));
+}
+
 #[cfg(test)]
 mod tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+
+    fn draw(w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn hero_drops_thermometer_when_room() {
+        // demo temp = 88.0 → "88.0°C"
+        let full = draw(40, 12);
+        assert!(full.contains("▄▀▀▄"), "4-row '8' glyph missing");
+        assert!(!full.contains("▐"), "thermometer should be gone in hero tier");
+        let compact = draw(40, 10);
+        assert!(compact.contains("▐"), "thermometer missing in compact tier");
+        assert!(compact.contains("88.0°C"));
+    }
+
     #[test]
     fn fill_ratio_clamps() {
         let ratio = |t: f32| ((t - 30.0) / 75.0).clamp(0.0, 1.0);
         assert_eq!(ratio(20.0), 0.0);
         assert_eq!(ratio(105.0), 1.0);
         assert!((ratio(67.5) - 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn hero_falls_back_to_coarse_when_precise_would_overflow() {
+        // 30x12 -> inner 28x10, full hero tier engaged (width >= 28, height >= 9).
+        // "100.5°C" formatted to 1 decimal is 31 glyph-columns wide, wider than
+        // the 28-wide inner area, so it must fall back to "100°C" (0 decimals)
+        // instead of truncating mid-glyph. The precise-width row never fits
+        // inside 28 cols, so its top row is not a substring of the buffer;
+        // the coarse row (23 cols) does fit and must appear intact.
+        let mut t = Terminal::new(TestBackend::new(30, 12)).unwrap();
+        let mut app = App::demo();
+        app.medium.as_mut().unwrap().temp_c = Some(100.5);
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let content: String =
+            t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        assert!(!content.contains('?'), "hero glyph fallback '?' should never render");
+        let precise_row0 = super::font::big_text("100.5°C").remove(0);
+        let coarse_row0 = super::font::big_text("100°C").remove(0);
+        assert!(
+            !content.contains(precise_row0.as_str()),
+            "full-precision hero row rendered intact — should have overflowed the 28-wide card"
+        );
+        assert!(
+            content.contains(coarse_row0.as_str()),
+            "coarse fallback row missing — hero should fall back to \"100°C\" when precise overflows"
+        );
+    }
+
+    #[test]
+    fn history_renders_block_sparkline() {
+        // Drive the chart helper directly with an area exactly as wide as
+        // the pushed history, so the whole buffer IS the chart: every column
+        // is pinned to a known sample, not just "a bar appears somewhere".
+        let mut t = Terminal::new(TestBackend::new(5, 1)).unwrap();
+        let mut app = App::new(false);
+        for v in [35.0_f32, 50.0, 70.0, 85.0, 100.0] {
+            app.temp_hist.push(v);
+        }
+        t.draw(|f| super::render_chart(f, f.area(), &app, super::theme::TEXT)).unwrap();
+        let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        // baseline-shift (v-30).clamp(0,75), then level = shifted*8/75:
+        // 35→5→0(' '), 50→20→2(▂), 70→40→4(▄), 85→55→5(▅), 100→70(clamped 75 cap)→7(▇)
+        assert_eq!(s, " ▂▄▅▇", "chart mis-scaled or mis-positioned");
+        assert_eq!(
+            s.chars().last().unwrap(),
+            '▇',
+            "newest sample (100°C, the tallest) must land at the right edge"
+        );
     }
 }

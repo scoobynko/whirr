@@ -51,19 +51,35 @@ whirr usable at small terminal sizes via the existing responsive philosophy.
 - Row 0 blank, rows 1–5 content, row 6 blank.
 - Content columns: logo (4 rows, vertically centered in the 5-row band) |
   housed fan (5 rows) | ambient facts, right-aligned, unchanged content.
-- Housed fan: fixed round housing, blades rotate through **8 frames**:
+- Star fan (final form — bigger true rotation, chosen after color flip,
+  rotating gap, small continuous rotation, and windmill flip all failed to
+  read as spinning; star glyphs carry no per-cell direction so only real
+  cell displacement over a fine-enough grid works): an e2b.dev-style
+  asterisk on a 17×7 grid, 8 blades × 3 star cells, rasterized from angle
+  math each frame — 15°/tick, 24 ticks per revolution. Arms alternate the
+  two brand tones (TEXT white / ACCENT teal), tones traveling with the
+  arms. Near-vertical blades draw ✳✳ pairs to counter the ~2:1 cell
+  aspect. The
+  header band grows to 7 rows (full header 9 incl. padding); logo and
+  facts center against the fan. Cardinal frame:
 
 ```
-╭─────╮
-│ ╲ ╱ │
-│  ✺  │
-│ ╱ ╲ │
-╰─────╯
+       ✳✳
+  ✳✳   ✳✳  ✳✳
+     ✳ ✳✳✳
+✳ ✳ ✳     ✳ ✳ ✳
+     ✳✳✳ ✳
+  ✳✳  ✳✳   ✳✳
+      ✳✳
 ```
 
-- `App::tick_fan` advances modulo 8 (was 4); `fan_interval` is halved so a
-  full revolution takes the same wall time as today — same perceived speed,
-  twice the smoothness. Load-scaling of the interval is unchanged.
+- `App::tick_fan` advances modulo 24. `fan_interval` simulates a real Mac
+  fan curve: driven by `temp_c` (lazy ≤55°C at 600ms/tick ≈ 14s/rev,
+  ramping to 80ms/tick ≈ 2s/rev at ≥95°C), falling back to CPU load when
+  no temp sensor exists. Reading true SMC fan RPM is a possible future
+  enhancement. The compact fan derives its 4-frame cycle as
+  `(fan_frame / 2) % 4`.
+- `ui/mod.rs` full tier: header `Length(9)` (was 7), gauges `Length(12)`.
 - `--no-fan` continues to hide the fan.
 
 **Compact tier** (given 3 rows): today's header verbatim — 3-row logo,
@@ -91,6 +107,10 @@ Details:
 - **Memory consolidated line**: `pressure NORMAL · swap 1.2G / 2.0G` in dim;
   the separate pressure line disappears (pressure also colors the hero).
 - **Power**: layout as today, hero re-rendered in the new font (4 rows).
+- **History charts**: all cards (and Network) render history as filled block
+  sparklines (`▁▂▃▄▅▆▇█`), not Braille lines — see
+  `2026-07-22-whirr-sparkline-charts-design.md`. Network splits into two
+  stacked download/upload bands.
 
 ## 4. Responsive behavior
 
@@ -105,8 +125,9 @@ Details:
   (CPU: numbered heatmap + chart; Temp: thermometer + line + chart;
   Power: 3-row… now 4-row font doesn't fit, so compact Power falls back to a
   single bold text line like Temp's compact readout; Memory: today's layout).
-- Header self-decides the same way: area height ≥ 5 → housed fan + padding,
-  else compact.
+- Header self-decides the same way: area height ≥ 7 → housed fan + padding
+  (the 1/5/1 padded split needs all 7 rows; shorter areas would clip the fan
+  housing), else compact.
 
 ## 5. Testing
 

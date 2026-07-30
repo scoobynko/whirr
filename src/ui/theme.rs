@@ -24,6 +24,21 @@ pub fn gradient(t: f32) -> Color {
     )
 }
 
+/// Linear RGB interpolation, used by the burst fan to dim partially covered
+/// cells toward the background (its stand-in for anti-aliasing, since a cell
+/// carries one foreground and no coverage information).
+pub fn blend(from: Color, to: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let ch = |c: Color| match c {
+        Color::Rgb(r, g, b) => (r, g, b),
+        other => panic!("blend expects Color::Rgb, got {other:?}"),
+    };
+    let (fr, fg, fb) = ch(from);
+    let (tr, tg, tb) = ch(to);
+    let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
+    Color::Rgb(lerp(fr, tr), lerp(fg, tg), lerp(fb, tb))
+}
+
 pub fn temp_color(c: f32) -> Color {
     if c >= 95.0 { RED } else if c >= 85.0 { AMBER } else { ACCENT }
 }
@@ -66,5 +81,22 @@ mod tests {
         assert_eq!(temp_color(60.0), ACCENT);
         assert_eq!(temp_color(85.0), AMBER);
         assert_eq!(temp_color(95.0), RED);
+    }
+
+    #[test]
+    fn blend_hits_both_endpoints_and_the_midpoint() {
+        let a = Color::Rgb(0, 0, 0);
+        let b = Color::Rgb(100, 200, 50);
+        assert_eq!(blend(a, b, 0.0), a);
+        assert_eq!(blend(a, b, 1.0), b);
+        assert_eq!(blend(a, b, 0.5), Color::Rgb(50, 100, 25));
+    }
+
+    #[test]
+    fn blend_clamps_out_of_range_t() {
+        let a = Color::Rgb(10, 20, 30);
+        let b = Color::Rgb(200, 210, 220);
+        assert_eq!(blend(a, b, -1.0), a);
+        assert_eq!(blend(a, b, 5.0), b);
     }
 }

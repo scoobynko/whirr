@@ -1,6 +1,5 @@
 use ratatui::prelude::*;
-use ratatui::symbols::Marker;
-use ratatui::widgets::{Axis, Chart, Dataset, GraphType, Paragraph};
+use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use super::{font, theme};
@@ -15,22 +14,35 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         return;
     };
 
+    let hero = font::hero_fits(inner);
     let rows = Layout::vertical([
-        Constraint::Length(3), // hero number
-        Constraint::Min(2),    // stacked chart
-        Constraint::Length(1), // battery footer
+        Constraint::Length(if hero { 4 } else { 1 }), // hero
+        Constraint::Length(1),                         // cpu/gpu/ane legend
+        Constraint::Min(2),                            // total sparkline
+        Constraint::Length(1),                         // battery footer
     ])
     .split(inner);
 
     match &m.power {
         Some(p) => {
             let total = p.cpu_w + p.gpu_w + p.ane_w;
-            let hero: Vec<Line> = font::big_text(&format!("{total:.1} W"))
-                .into_iter()
-                .map(|r| Line::styled(r, Style::default().fg(theme::ACCENT)))
-                .collect();
-            f.render_widget(Paragraph::new(hero), rows[0]);
-            render_stack(f, rows[1], app);
+            let text = format!("{total:.1} W");
+            if hero {
+                let coarse = format!("{total:.0} W");
+                let lines = font::hero_lines(&text, &coarse, inner.width, theme::ACCENT);
+                f.render_widget(Paragraph::new(lines), rows[0]);
+            } else {
+                f.render_widget(
+                    Paragraph::new(Span::styled(text, Style::default().fg(theme::ACCENT).bold())),
+                    rows[0],
+                );
+            }
+            let legend = format!("cpu {:.1} · gpu {:.1} · ane {:.1}", p.cpu_w, p.gpu_w, p.ane_w);
+            f.render_widget(
+                Paragraph::new(legend).style(Style::default().fg(theme::DIM)),
+                rows[1],
+            );
+            render_spark(f, rows[2], app);
         }
         None => {
             f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), rows[0]);
@@ -39,50 +51,97 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let battery_line = match &m.battery {
         Some(b) => {
+            // Kept terse ("cyc"/"h" rather than "cycles"/"health") so the
+            // full line — percent, cycles and health — still fits the
+            // narrowest full-tier card (inner width 28 at 120 cols); the
+            // old wording clipped at widths at or below ~124.
             let state = if b.charging { "⚡" } else { "🔋" };
-            let health = b.health_pct.map_or(String::new(), |h| format!(" · health {h}%"));
-            format!("{state} {}% · {} cycles{health}", b.percent, b.cycles)
+            let health = b.health_pct.map_or(String::new(), |h| format!(" · h{h}%"));
+            format!("{state} {}% · {}cyc{health}", b.percent, b.cycles)
         }
         None => String::new(), // desktop Mac: hide line
     };
     f.render_widget(
         Paragraph::new(battery_line).style(Style::default().fg(theme::DIM)),
-        rows[2],
+        rows[3],
     );
 }
 
-/// Stacked braille lines: cpu, cpu+gpu, cpu+gpu+ane — three cumulative series.
-fn render_stack(f: &mut Frame, area: Rect, app: &App) {
-    let hist: Vec<(f64, f64, f64)> = app.power_hist.iter().collect();
-    if hist.is_empty() {
+/// Filled block sparkline of total watts (cpu + gpu + ane).
+fn render_spark(f: &mut Frame, area: Rect, app: &App) {
+    let data: Vec<u64> = app
+        .power_hist
+        .iter()
+        .map(|(c, g, a)| ((c + g + a) * 10.0).round() as u64)
+        .collect();
+    if data.is_empty() {
         return;
     }
-    let cpu: Vec<(f64, f64)> = hist.iter().enumerate().map(|(i, v)| (i as f64, v.0)).collect();
-    let cpu_gpu: Vec<(f64, f64)> =
-        hist.iter().enumerate().map(|(i, v)| (i as f64, v.0 + v.1)).collect();
-    let total: Vec<(f64, f64)> =
-        hist.iter().enumerate().map(|(i, v)| (i as f64, v.0 + v.1 + v.2)).collect();
-    let y_max = total.iter().map(|p| p.1).fold(1.0, f64::max) * 1.2;
-
-    // total (brightest) drawn last so it sits on top
-    let chart = Chart::new(vec![
-        Dataset::default()
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme::gradient(0.4)))
-            .data(&cpu),
-        Dataset::default()
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme::gradient(0.7)))
-            .data(&cpu_gpu),
-        Dataset::default()
-            .marker(Marker::Braille)
-            .graph_type(GraphType::Line)
-            .style(Style::default().fg(theme::ACCENT))
-            .data(&total),
-    ])
-    .x_axis(Axis::default().bounds([0.0, 59.0]))
-    .y_axis(Axis::default().bounds([0.0, y_max]));
-    f.render_widget(chart, area);
+    let peak = app.power_hist.iter().map(|(c, g, a)| c + g + a).fold(1.0, f64::max) * 1.2;
+    let max = (peak * 10.0).round() as u64;
+    super::spark::render(f, area, &data, max, Style::default().fg(theme::ACCENT));
 }
+
+#[cfg(test)]
+mod tests {
+    use ratatui::backend::TestBackend;
+    use ratatui::Terminal;
+
+    use crate::app::App;
+
+    fn draw(w: u16, h: u16) -> String {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    #[test]
+    fn hero_when_room_compact_when_small() {
+        // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W"
+        let full = draw(40, 12); // inner 38x10 → hero
+        assert!(full.contains("▀▀▀█"), "4-row '7' glyph missing"); // '7' row 0
+        assert!(full.contains("cpu 6.4"), "power legend (cpu/gpu/ane) missing");
+        let compact = draw(40, 10); // inner 38x8 → compact
+        assert!(compact.contains("7.9 W"));
+        assert!(!compact.contains("▀▀▀█"));
+    }
+
+    #[test]
+    fn battery_footer_fits_at_120_width_card() {
+        // Real full-tier card size at 120 total cols with all 4 gauges shown
+        // (120/4=30 wide, inner 28): the old "cycles"/"health" wording
+        // clipped at widths at or below ~124.
+        let full = draw(30, 12);
+        // "⚡" renders as a double-width glyph (an extra cell reserved after
+        // it), hence the two spaces before "76%".
+        assert!(
+            full.contains("⚡  76% · 120cyc · h97%"),
+            "battery footer clipped or missing at inner width 28"
+        );
+    }
+
+    #[test]
+    fn history_renders_block_sparkline() {
+        // Drive the chart helper directly with an area exactly as wide as
+        // the pushed history, so the whole buffer IS the chart: every column
+        // is pinned to a known sample, not just "a bar appears somewhere".
+        let mut t = Terminal::new(TestBackend::new(4, 1)).unwrap();
+        let mut app = App::new(false);
+        // totals (cpu+gpu+ane): 1.0, 3.0, 5.0, 10.0 W; peak = 10.0*1.2 = 12.0 W
+        for v in [(0.6_f64, 0.3, 0.1), (2.0, 0.8, 0.2), (3.5, 1.2, 0.3), (7.0, 2.5, 0.5)] {
+            app.power_hist.push(v);
+        }
+        t.draw(|f| super::render_spark(f, f.area(), &app)).unwrap();
+        let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
+        // scaled data = round(total*10); max = round(peak*10) = 120.
+        // level = scaled*8/120: 10→0(' '), 30→2(▂), 50→3(▃), 100→6(▆)
+        assert_eq!(s, " ▂▃▆", "chart mis-scaled or mis-positioned");
+        assert_eq!(
+            s.chars().last().unwrap(),
+            '▆',
+            "newest sample (10 W, the tallest) must land at the right edge"
+        );
+    }
+}
+

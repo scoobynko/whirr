@@ -220,7 +220,7 @@ git commit -m "feat: fan ticks 8 frames at half interval for smoother spin"
 
 **Interfaces:**
 - Consumes: `app.fan_frame` (mod 8, Task 2).
-- Produces: `header::render(f, area, app)` self-selects: `area.height >= 5` → full padded layout (blank row, 5-row band, blank row), else today's compact 3-row layout. Constants `LOGO4: [&str; 4]`, `FAN_BLADES: [[&str; 3]; 8]`, compact `LOGO`/`FAN_FRAMES` kept.
+- Produces: `header::render(f, area, app)` self-selects: `area.height >= 7` → full padded layout (blank row, 5-row band, blank row — the 1/5/1 split needs all 7 rows, shorter areas clip the housing), else today's compact 3-row layout. Constants `LOGO4: [&str; 4]`, `FAN_BLADES: [[&str; 3]; 8]`, compact `LOGO`/`FAN_FRAMES` kept.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -318,7 +318,9 @@ const FAN_BLADES: [[&str; 3]; 8] = [
 ];
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    if area.height >= 5 {
+    // The padded 1/5/1 split needs all 7 rows; shorter areas would clip
+    // the fan housing, so they take the compact tier.
+    if area.height >= 7 {
         render_full(f, area, app);
     } else {
         render_compact(f, area, app);

@@ -37,7 +37,10 @@ pub struct App {
     pub pending_kill: Option<(i32, String)>,
     pub message: Option<String>,
     pub no_fan: bool,
-    pub fan_frame: usize,
+    /// The burst's inner-ring rotation in degrees, wrapped to `0.0..360.0`.
+    /// The outer ring is its negation, so one accumulator drives both. Thermal:
+    /// the hotter the machine, the faster it turns.
+    pub fan_angle_deg: f32,
     pub should_quit: bool,
     pub dirty: bool,
 }
@@ -59,7 +62,7 @@ impl App {
             pending_kill: None,
             message: None,
             no_fan,
-            fan_frame: 0,
+            fan_angle_deg: 0.0,
             should_quit: false,
             dirty: true,
         }
@@ -69,8 +72,28 @@ impl App {
     /// `FastSnap` (a few processes, per-core loads), one `MediumSnap` (all
     /// `Some`, temp at 88.0 to exercise the amber threshold), and one
     /// `SlowSnap` (a few ports, not stale).
+    ///
+    /// The history buffers are pre-seeded with a short varied ramp before the
+    /// "current" sample lands (below), so chart-rendering tests exercise a
+    /// real filled chart body instead of a single point — a single-sample
+    /// history can never show whether the newest data lands at the right
+    /// edge of the chart (that gap is exactly how the spark::render
+    /// left-align bug shipped invisibly).
     pub fn demo() -> Self {
         let mut app = Self::new(false);
+        for v in [15.0_f32, 28.0, 52.0, 70.0, 58.0, 33.0, 22.0, 40.0, 63.0, 77.0, 49.0, 26.0] {
+            app.cpu_hist.push(v);
+        }
+        for v in [
+            (200_000.0_f64, 40_000.0),
+            (450_000.0, 90_000.0),
+            (900_000.0, 180_000.0),
+            (600_000.0, 120_000.0),
+            (1_500_000.0, 250_000.0),
+            (300_000.0, 60_000.0),
+        ] {
+            app.net_hist.push(v);
+        }
         app.ingest(Snapshot::Fast(FastSnap {
             per_core: vec![12.0, 45.0, 78.0, 30.0],
             total_cpu: 41.0,
@@ -86,6 +109,19 @@ impl App {
             load_avg: 2.35,
             mem_total: 16_000_000_000,
         }));
+        for v in [42.0_f32, 55.0, 70.0, 82.0, 91.0, 76.0, 61.0, 48.0, 65.0, 84.0] {
+            app.temp_hist.push(v);
+        }
+        for v in [
+            (2.0_f64, 0.4, 0.05),
+            (3.5, 0.7, 0.1),
+            (5.0, 1.0, 0.2),
+            (7.5, 1.6, 0.35),
+            (6.0, 1.3, 0.25),
+            (4.2, 0.9, 0.15),
+        ] {
+            app.power_hist.push(v);
+        }
         app.ingest(Snapshot::Medium(MediumSnap {
             temp_c: Some(88.0),
             power: Some(PowerSnap { cpu_w: 6.4, gpu_w: 1.2, ane_w: 0.3 }),
@@ -221,13 +257,44 @@ impl App {
         }
     }
 
-    pub fn fan_interval(&self) -> Duration {
-        let load = self.fast.as_ref().map_or(0.0, |f| f.total_cpu / 100.0);
-        Duration::from_millis((500.0 - 400.0 * f64::from(load)) as u64)
+    /// Simulated Mac fan curve: lazy below ~55°C, ramping steeply toward
+    /// 95°C — temperature is what actually drives real fans. Falls back to CPU
+    /// load when the machine has no usable temp sensor.
+    pub fn heat(&self) -> f32 {
+        match self.medium.as_ref().and_then(|m| m.temp_c) {
+            // A NaN/infinite sensor read must not survive `clamp` (which
+            // passes NaN through unchanged): `fan_interval` casts heat into a
+            // millisecond duration, and a NaN there saturates to 0ms, spinning
+            // the redraw loop at full speed. Fall back to the no-sensor path.
+            Some(t) if t.is_finite() => ((t - 55.0) / 40.0).clamp(0.0, 1.0),
+            _ => self.fast.as_ref().map_or(0.0, |f| {
+                if f.total_cpu.is_finite() { (f.total_cpu / 100.0).clamp(0.0, 1.0) } else { 0.0 }
+            }),
+        }
     }
 
-    pub fn tick_fan(&mut self) {
-        self.fan_frame = (self.fan_frame + 1) % 4;
+    /// Redraw interval for the burst: 125ms idle down to 60ms hot. The frame
+    /// rate has to rise with the spin, not just the spin itself — each ring is
+    /// 10-fold symmetric, so anything past 18°/frame aliases into a backwards
+    /// spin. At 60ms/125ms this stays at 10.8°/3.2° per frame.
+    pub fn fan_interval(&self) -> Duration {
+        Duration::from_millis((125.0 - 65.0 * f64::from(self.heat())) as u64)
+    }
+
+    /// Advance the burst rotation over `dt` of real time: 360°/14s idle up to
+    /// 360°/2s hot, matching the perceived range of the old stepped fan.
+    pub fn tick_fan(&mut self, dt: Duration) {
+        const COLD_DPS: f32 = 360.0 / 14.0;
+        const HOT_DPS: f32 = 360.0 / 2.0;
+        let dps = COLD_DPS + (HOT_DPS - COLD_DPS) * self.heat();
+        // Each ring is 10-fold symmetric, so a step of 18 deg or more aliases
+        // into a backwards spin. dt is measured, not nominal, and heat can rise
+        // between the sleep and the tick, so the step is clamped rather than
+        // assumed small. Losing a few degrees after a stall is invisible; a
+        // backwards jump is not.
+        const MAX_STEP: f32 = 17.0;
+        let step = (dps * dt.as_secs_f32()).min(MAX_STEP);
+        self.fan_angle_deg = (self.fan_angle_deg + step).rem_euclid(360.0);
         self.dirty = true;
     }
 }
@@ -251,6 +318,16 @@ mod tests {
             ],
             net_rx_rate: 0.0, net_tx_rate: 0.0, net_rx_total: 0, net_tx_total: 0,
             load_avg: 1.0, mem_total: 1,
+        }
+    }
+
+    fn demo_medium(temp_c: f32) -> MediumSnap {
+        MediumSnap {
+            temp_c: Some(temp_c),
+            power: None,
+            battery: None,
+            memory: None,
+            uptime_secs: 3600,
         }
     }
 
@@ -299,14 +376,143 @@ mod tests {
     }
 
     #[test]
-    fn fan_speed_scales_with_load() {
+    fn fan_speed_follows_simulated_thermal_curve() {
         let mut a = App::new(false);
-        let idle = a.fan_interval();
-        let mut f = app_with_procs().fast.unwrap();
+        // No data at all: idle spin at 125ms.
+        assert_eq!(a.fan_interval().as_millis(), 125);
+
+        // Temperature drives the curve when a sensor exists.
+        let snap = |t: f32| MediumSnap {
+            temp_c: Some(t),
+            power: None,
+            battery: None,
+            memory: None,
+            uptime_secs: 0,
+        };
+        a.ingest(Snapshot::Medium(snap(55.0)));
+        assert_eq!(a.fan_interval().as_millis(), 125, "cool chip keeps idle speed");
+        a.ingest(Snapshot::Medium(snap(95.0)));
+        assert_eq!(a.fan_interval().as_millis(), 60, "hot chip spins fastest");
+        a.ingest(Snapshot::Medium(snap(75.0)));
+        let mid = a.fan_interval().as_millis();
+        assert!(mid > 60 && mid < 125, "mid temp ramps between: {mid}");
+    }
+
+    #[test]
+    fn fan_speed_falls_back_to_load_without_temp_sensor() {
+        let mut a = App::new(false);
+        let mut f = demo_fast();
         f.total_cpu = 100.0;
         a.ingest(Snapshot::Fast(f));
-        assert!(a.fan_interval() < idle);
-        assert_eq!(a.fan_interval().as_millis(), 100);
+        assert_eq!(a.fan_interval().as_millis(), 60, "full load = fastest without sensor");
+    }
+
+    #[test]
+    fn heat_tracks_temperature_and_falls_back_to_load() {
+        let mut a = App::new(false);
+        assert_eq!(a.heat(), 0.0, "no samples yet");
+        a.ingest(Snapshot::Medium(demo_medium(40.0)));
+        assert_eq!(a.heat(), 0.0, "40C is below the 55C floor");
+        a.ingest(Snapshot::Medium(demo_medium(95.0)));
+        assert_eq!(a.heat(), 1.0, "95C is the ceiling");
+        a.ingest(Snapshot::Medium(demo_medium(75.0)));
+        assert!((a.heat() - 0.5).abs() < 0.01, "75C is halfway");
+    }
+
+    #[test]
+    fn heat_falls_back_to_load_on_non_finite_temp() {
+        // A malformed sensor read (NaN/inf) must not leak into fan_interval,
+        // whose (125.0 - 65.0 * NaN) as u64 saturates to 0ms and would spin
+        // the redraw loop at full speed pinning a core.
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let mut a = App::new(false);
+            a.ingest(Snapshot::Medium(demo_medium(bad)));
+            assert!(a.heat().is_finite(), "{bad} produced non-finite heat");
+            assert_eq!(a.heat(), 0.0, "{bad}: no fast snapshot, falls back to 0.0");
+            assert!(
+                a.fan_interval() >= Duration::from_millis(60),
+                "{bad}: fan_interval collapsed to a busy loop: {:?}",
+                a.fan_interval()
+            );
+        }
+    }
+
+    #[test]
+    fn fan_interval_ramps_from_125ms_to_60ms() {
+        let mut a = App::new(false);
+        assert_eq!(a.fan_interval(), Duration::from_millis(125));
+        a.ingest(Snapshot::Medium(demo_medium(95.0)));
+        assert_eq!(a.fan_interval(), Duration::from_millis(60));
+    }
+
+    #[test]
+    fn tick_fan_never_turns_a_ring_more_than_eighteen_degrees_per_frame() {
+        // Each ring is 10-fold symmetric: above 18 deg/frame it aliases and
+        // appears to spin backwards. Must hold across the whole thermal range.
+        for temp in [40.0, 55.0, 65.0, 75.0, 85.0, 95.0, 110.0] {
+            let mut a = App::new(false);
+            a.ingest(Snapshot::Medium(demo_medium(temp)));
+            let dt = a.fan_interval();
+            a.fan_angle_deg = 0.0;
+            a.tick_fan(dt);
+            assert!(
+                a.fan_angle_deg < 18.0,
+                "{temp}C turns {}deg per frame — aliases",
+                a.fan_angle_deg
+            );
+        }
+
+        // Adversarial: dt is measured, not nominal, and heat can change
+        // between the sleep and the tick (main.rs ingests a new sample before
+        // calling tick_fan). At max heat, an unclamped step blows well past
+        // 18 deg for a cold-cadence dt (the real-world trigger), and further
+        // still for a stalled loop. The clamp must hold regardless of dt.
+        // Note: each duration must have an unclamped step that is NOT a
+        // multiple of 360°, else rem_euclid(360.0) wraps it to zero and the
+        // assertion passes vacuously even without the clamp.
+        for dt in [Duration::from_millis(125), Duration::from_secs(1), Duration::from_secs(7)] {
+            let mut a = App::new(false);
+            a.ingest(Snapshot::Medium(demo_medium(95.0)));
+            a.fan_angle_deg = 100.0;
+            a.tick_fan(dt);
+            let delta = (a.fan_angle_deg - 100.0).rem_euclid(360.0);
+            assert!(
+                delta < 18.0,
+                "max heat with dt={dt:?} turned {delta}deg in one frame — aliases"
+            );
+        }
+    }
+
+    #[test]
+    fn tick_fan_spins_faster_when_hot_and_wraps_at_360() {
+        let mut cold = App::new(false);
+        cold.ingest(Snapshot::Medium(demo_medium(40.0)));
+        let mut hot = App::new(false);
+        hot.ingest(Snapshot::Medium(demo_medium(95.0)));
+        let dt = Duration::from_millis(100);
+        cold.tick_fan(dt);
+        hot.tick_fan(dt);
+        assert!(hot.fan_angle_deg > cold.fan_angle_deg * 3.0, "hot fan should be much faster");
+
+        let mut a = App::new(false);
+        a.fan_angle_deg = 359.0;
+        a.ingest(Snapshot::Medium(demo_medium(95.0)));
+        a.tick_fan(Duration::from_millis(100));
+        assert!(a.fan_angle_deg < 360.0, "angle must wrap, got {}", a.fan_angle_deg);
+    }
+
+    #[test]
+    fn cold_fan_takes_about_fourteen_seconds_per_revolution() {
+        let mut a = App::new(false);
+        a.ingest(Snapshot::Medium(demo_medium(40.0)));
+        // One second of real ticks at the cold cadence (125ms), matching how
+        // main.rs actually drives tick_fan — a single 1s dt would itself
+        // exceed the per-frame clamp and no longer measure the rate.
+        for _ in 0..8 {
+            a.tick_fan(Duration::from_millis(125));
+        }
+        // 360/14 = 25.7 deg/s
+        assert!((a.fan_angle_deg - 25.7).abs() < 0.5, "got {} deg/s", a.fan_angle_deg);
     }
 
     #[test]

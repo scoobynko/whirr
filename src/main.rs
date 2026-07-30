@@ -92,8 +92,9 @@ fn main() -> io::Result<()> {
             app.ingest(snap);
         }
         if !app.no_fan && last_fan.elapsed() >= app.fan_interval() {
-            app.tick_fan();
-            last_fan = std::time::Instant::now();
+            let now = std::time::Instant::now();
+            app.tick_fan(now - last_fan);
+            last_fan = now;
         }
         if app.should_quit {
             break;
