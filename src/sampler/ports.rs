@@ -98,7 +98,7 @@ pub fn build_rows(
     for row in &mut rows {
         row.ports.sort_unstable();
     }
-    rows.sort_by_key(|r| (r.group.rank(), r.ports[0]));
+    rows.sort_by_key(|r| (r.group.rank(), r.ports[0], r.pid));
     rows
 }
 
@@ -218,5 +218,36 @@ mod tests {
         assert_eq!(CLAUDE_PATH, "/claude/versions/");
         let real = "/Users/me/.local/share/claude/versions/2.1.220";
         assert!(real.contains(CLAUDE_PATH), "observed layout must still match");
+    }
+
+    #[test]
+    fn deterministic_ordering_with_tied_sort_keys() {
+        // Two pids in the same group with the same lowest port create a tie
+        // in the (group, lowest_port) sort key. This tie cannot arise through
+        // parse_lsof (which deduplicates ports via BTreeMap), but this module
+        // should not silently depend on that invariant. The test documents that
+        // build_rows independently enforces determinism via pid as a tertiary key.
+        let ports = [
+            pi(3000, "app1", 100),
+            pi(3000, "app2", 200),
+        ];
+
+        // Run build_rows several times to check for non-determinism.
+        let mut results = Vec::new();
+        for _ in 0..5 {
+            let rows = build_rows(&ports, |_| {
+                facts(Some("/bin/node"), Some("/Users/me/p/proj"), true)
+            });
+            let pids: Vec<i32> = rows.iter().map(|r| r.pid).collect();
+            results.push(pids);
+        }
+
+        // All runs must produce identical order.
+        for result in &results[1..] {
+            assert_eq!(result, &results[0], "ordering must be deterministic across runs");
+        }
+
+        // The order must be sorted by pid (100 before 200).
+        assert_eq!(results[0], vec![100, 200], "rows must be ordered by pid when sort keys tie");
     }
 }
