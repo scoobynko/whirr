@@ -25,27 +25,32 @@ use crate::app::{App, MAX_VISIBLE_PROCS};
 ///
 /// - **Width >= 120** (`three_cards`): the body splits into two rows —
 ///   processes (with network alongside it, if it fits) on top, and three
-///   equal-width cards (localhost, claude sessions, others) in a fixed-height
-///   row below. Splitting the three port/session groups into their own cards
-///   is only worth the width when each can show a useful number of rows; below
-///   120 columns they would be too cramped to read.
+///   equal-width cards (localhost, claude sessions, others) in a variable-height
+///   row below. The card row uses constraints `Min(4)` (processes) and `Max(6)`
+///   (cards): at 120×30 the body is 9 rows, minus 2 borders leaves 7 content rows,
+///   so processes gets its 4-row floor and cards takes 5 (2 borders + 3 content),
+///   giving each card 3 visible rows. At >=120×40 the body has room for both
+///   processes to grow past its floor and cards to reach their 6-row max
+///   (2 borders + 4 content). Splitting the three port/session groups into their
+///   own cards is only worth the width when each can show a useful number of rows;
+///   below 120 columns they would be too cramped to read.
 /// - **Narrower**: the single-card `render_left_column` shape below, with the
 ///   grouped `ports::render` card (all three groups, headers, in one card)
 ///   standing in for the three-card row.
 ///
-/// The body below the gauges splits into a left column (processes stacked
-/// over ports) and a right column (network at full body height). Within the
-/// left column the process table is capped at `MAX_VISIBLE_PROCS` rows (+
-/// footer + borders) via `Max`, paired with a `Min(4)` floor for the ports
-/// card below it: the process table claims up to its cap and ports gets
-/// whatever's left, but never below its floor — so at tight body heights the
-/// process table shrinks (fewer visible rows) while ports keeps its minimum,
-/// and once there's slack beyond both the process table takes its full cap
-/// and ports grows into the rest. (`Length(13)` paired with the same
-/// `Min(4)` produces an identical split in ratatui 0.29 at every body height
-/// tested — `Max` is used here because it documents the "cap, not a fixed
-/// size" intent, not because it behaves differently from `Length` in this
-/// pairing.) Either way, this constraint can only ever move space between
+/// The body below the gauges (when narrower than 120 cols) splits into a left
+/// column (processes stacked over ports) and a right column (network at full
+/// body height). Within the left column the process table is capped at
+/// `MAX_VISIBLE_PROCS` rows (+ footer + borders) via `Max`, paired with a
+/// `Min(4)` floor for the ports card below it: the process table claims up to
+/// its cap and ports gets whatever's left, but never below its floor — so at
+/// tight body heights the process table shrinks (fewer visible rows) while
+/// ports keeps its minimum, and once there's slack beyond both the process
+/// table takes its full cap and ports grows into the rest. (`Length(13)` paired
+/// with the same `Min(4)` produces an identical split in ratatui 0.29 at every
+/// body height tested — `Max` is used here because it documents the "cap, not
+/// a fixed size" intent, not because it behaves differently from `Length` in
+/// this pairing.) Either way, this constraint can only ever move space between
 /// the process table and ports: the header and gauges rows are resolved by
 /// the outer `Layout::split` above, before `render_left_column` is ever
 /// called, so nothing inside it can squeeze them.
@@ -94,8 +99,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     let three_cards = area.width >= 120;
     if three_cards {
         // Row A holds processes and network; row B the three cards. Row B gets
-        // a fixed 6 (2 borders + 4 rows) where there is room, else a third.
-        let rows = Layout::vertical([Constraint::Min(5), Constraint::Length(6)]).split(body);
+        // up to 6 (2 borders + 4 content rows), with Processes getting a floor of 4.
+        let rows = Layout::vertical([Constraint::Min(4), Constraint::Max(6)]).split(body);
         if show_network {
             let cols = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
                 .split(rows[0]);

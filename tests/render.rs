@@ -167,6 +167,60 @@ fn compact_tier_keeps_old_visuals() {
     assert!(c.contains("88.0°C"), "compact temp readout missing");
 }
 
+/// Measure the actual height of the card band at different terminal sizes.
+/// Returns (card_band_total_height, content_rows) where content_rows = total - 2 borders.
+fn card_band_dimensions(w: u16, h: u16) -> (usize, usize) {
+    let lines = draw_grid(w, h);
+
+    // Find the row where the card band starts (title row of localhost)
+    let start_row = match lines.iter().position(|l| l.contains("localhost")) {
+        Some(r) => r,
+        None => return (0, 0),
+    };
+
+    // Find the row where the card band ends (last border line before next section or terminal end)
+    let mut end_row = start_row;
+    for (i, line) in lines.iter().enumerate().skip(start_row + 1) {
+        // Stop when we hit a line that looks like the bottom border of the cards
+        if line.contains("╯") || line.contains("┘") || i == lines.len() - 1 {
+            end_row = i;
+            break;
+        }
+    }
+
+    let total_height = end_row - start_row + 1;
+    let content_rows = total_height.saturating_sub(2); // subtract top and bottom borders
+    (total_height, content_rows)
+}
+
+#[test]
+fn card_band_has_adequate_space_at_120x30() {
+    // At 120x30 with full tier (header 9 + gauges 12), body gets 9 rows.
+    // The card band should get enough room to show 3 content rows.
+    let (total, content) = card_band_dimensions(120, 30);
+    eprintln!("120x30: card band total={} rows, content={} rows", total, content);
+    assert_eq!(total, 5, "At 120x30 card band should be 5 rows total");
+    assert_eq!(content, 3, "At 120x30 card band should have 3 content rows");
+}
+
+#[test]
+fn card_band_reaches_full_height_at_160x45() {
+    // At larger sizes, the card band should get its full 4 content rows.
+    let (total, content) = card_band_dimensions(160, 45);
+    eprintln!("160x45: card band total={} rows, content={} rows", total, content);
+    assert_eq!(total, 6, "At 160x45 card band should be 6 rows total");
+    assert_eq!(content, 4, "At 160x45 card band should have 4 content rows");
+}
+
+#[test]
+fn card_band_at_120x40() {
+    // At 120x40, measure the card band height for comprehensive coverage.
+    let (total, content) = card_band_dimensions(120, 40);
+    eprintln!("120x40: card band total={} rows, content={} rows", total, content);
+    assert_eq!(total, 6, "At 120x40 card band should be 6 rows total");
+    assert_eq!(content, 4, "At 120x40 card band should have 4 content rows");
+}
+
 #[test]
 fn tier_boundary_is_exactly_120x30() {
     assert!(has_braille(&draw_at(120, 30)), "120x30 must be full tier");
