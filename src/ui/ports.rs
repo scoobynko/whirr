@@ -672,30 +672,4 @@ mod tests {
         );
     }
 
-    #[test]
-    #[ignore]
-    fn _render_defects_before_after() {
-        // For manual verification of fixes. Run with: cargo test --lib _render_defects -- --ignored --nocapture
-        println!("\n=== DEFECT 1 at 46x14 (full tier) ===");
-        let lines = draw(46, 14);
-        for line in &lines {
-            if line.contains("ai-design-kit") {
-                println!("{}", line);
-            }
-        }
-        println!("\n=== DEFECT 1 at 46x6 (compact tier) ===");
-        let lines = draw(46, 6);
-        for line in &lines {
-            if line.contains("ai-design-kit") {
-                println!("{}", line);
-            }
-        }
-        println!("\n=== DEFECT 2 at 22x6 (doubled ellipsis) ===");
-        let lines = draw(22, 6);
-        for line in &lines {
-            if line.contains("glassbook") {
-                println!("{}", line);
-            }
-        }
-    }
 }
