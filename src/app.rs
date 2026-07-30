@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
 use crate::sampler::ports::{PortGroup, PortRow};
+use crate::sampler::sessions::ClaudeSession;
 use crate::sampler::{
     BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
     Snapshot,
@@ -103,6 +104,7 @@ impl App {
                 ProcInfo { pid: 202, name: "WindowServer".into(), cpu: 8.3, mem: 256_000 },
                 ProcInfo { pid: 303, name: "whirr".into(), cpu: 2.1, mem: 32_000 },
                 ProcInfo { pid: 503, name: "claude".into(), cpu: 12.4, mem: 400_000 },
+                ProcInfo { pid: 601, name: "claude".into(), cpu: 8.1, mem: 300_000 },
             ],
             net_rx_rate: 1_200_000.0,
             net_tx_rate: 300_000.0,
@@ -161,6 +163,12 @@ impl App {
                     pid: 505,
                     ports: vec![5000, 7000],
                 },
+            ],
+            sessions: vec![
+                ClaudeSession { pid: 601, project: "axterio".into(), tty: Some("ttys020".into()) },
+                ClaudeSession { pid: 602, project: "axterio".into(), tty: Some("ttys021".into()) },
+                ClaudeSession { pid: 603, project: "whirr".into(), tty: Some("ttys004".into()) },
+                ClaudeSession { pid: 604, project: "eye-claudius".into(), tty: None },
             ],
             stale: false,
         }));

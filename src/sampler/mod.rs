@@ -79,6 +79,7 @@ pub struct PortInfo {
 
 pub struct SlowSnap {
     pub rows: Vec<crate::sampler::ports::PortRow>,
+    pub sessions: Vec<crate::sampler::sessions::ClaudeSession>,
     pub stale: bool,
 }
 

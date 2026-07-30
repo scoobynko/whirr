@@ -3,11 +3,35 @@ use std::process::Command;
 use std::sync::mpsc::Sender;
 use std::time::Duration;
 
-use super::ports;
 use super::ports::PortRow;
+use super::{ports, sessions};
 use super::{PortInfo, SlowSnap, Snapshot};
 
 const TICK: Duration = Duration::from_secs(10);
+
+/// Walk every pid, keep the Claude processes, and read what the session card
+/// needs. `exec_path` is one cheap syscall per pid — deliberately not `args`,
+/// whose argv buffer would make a full-system walk expensive.
+fn scan_sessions() -> Vec<sessions::ClaudeSession> {
+    let facts: Vec<sessions::SessionFacts> = crate::mac::proc::list_all_pids()
+        .into_iter()
+        .filter_map(|pid| {
+            let exec_path = crate::mac::proc::exec_path(pid)?;
+            if !exec_path.to_str().is_some_and(ports::is_claude) {
+                return None;
+            }
+            // Only matched pids pay for the extra two calls.
+            let info = crate::mac::proc::bsd_info(pid);
+            Some(sessions::SessionFacts {
+                pid,
+                exec_path: Some(exec_path),
+                cwd: crate::mac::proc::cwd(pid),
+                tty: info.and_then(|i| i.tty),
+            })
+        })
+        .collect();
+    sessions::build_sessions(&facts)
+}
 
 pub fn parse_lsof(output: &str) -> Vec<PortInfo> {
     let mut by_port: BTreeMap<u16, PortInfo> = BTreeMap::new();
@@ -54,7 +78,7 @@ pub fn run(tx: Sender<Snapshot>) {
                     }
                 });
                 last_good = rows;
-                SlowSnap { rows: last_good.clone(), stale: false }
+                SlowSnap { rows: last_good.clone(), sessions: scan_sessions(), stale: false }
             }
             // lsof exits with status 1 and empty stdout when nothing matches
             // the filter (e.g. no listening TCP sockets right now) — that is
@@ -68,9 +92,9 @@ pub fn run(tx: Sender<Snapshot>) {
                     && out.stderr.is_empty() =>
             {
                 last_good = Vec::new();
-                SlowSnap { rows: Vec::new(), stale: false }
+                SlowSnap { rows: Vec::new(), sessions: Vec::new(), stale: false }
             }
-            _ => SlowSnap { rows: last_good.clone(), stale: true },
+            _ => SlowSnap { rows: last_good.clone(), sessions: Vec::new(), stale: true },
         };
         if tx.send(Snapshot::Slow(snap)).is_err() {
             return;

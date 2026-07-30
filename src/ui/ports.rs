@@ -288,7 +288,7 @@ mod tests {
     fn app_with_rows(rows: Vec<PortRow>, selected: usize) -> App {
         let mut app = App::new(false);
         app.focus = Focus::Ports;
-        app.ingest(Snapshot::Slow(SlowSnap { rows, stale: false }));
+        app.ingest(Snapshot::Slow(SlowSnap { rows, sessions: Vec::new(), stale: false }));
         app.selected = selected;
         app
     }
