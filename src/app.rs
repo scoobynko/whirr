@@ -4,9 +4,10 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
+use crate::sampler::ports::{PortGroup, PortRow};
 use crate::sampler::{
-    BatterySnap, FastSnap, MemDetail, MediumSnap, PortInfo, PowerSnap, PressureLevel, ProcInfo,
-    SlowSnap, Snapshot,
+    BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
+    Snapshot,
 };
 
 pub enum Focus {
@@ -101,6 +102,7 @@ impl App {
                 ProcInfo { pid: 101, name: "kernel_task".into(), cpu: 12.5, mem: 512_000 },
                 ProcInfo { pid: 202, name: "WindowServer".into(), cpu: 8.3, mem: 256_000 },
                 ProcInfo { pid: 303, name: "whirr".into(), cpu: 2.1, mem: 32_000 },
+                ProcInfo { pid: 503, name: "claude".into(), cpu: 12.4, mem: 400_000 },
             ],
             net_rx_rate: 1_200_000.0,
             net_tx_rate: 300_000.0,
@@ -138,10 +140,27 @@ impl App {
             uptime_secs: 3_600 * 5,
         }));
         app.ingest(Snapshot::Slow(SlowSnap {
-            ports: vec![
-                PortInfo { port: 22, process: "sshd".into(), pid: 1, project: None },
-                PortInfo { port: 8080, process: "whirr-dev".into(), pid: 303, project: Some("my-app".into()) },
-                PortInfo { port: 5432, process: "postgres".into(), pid: 55, project: None },
+            rows: vec![
+                PortRow {
+                    group: PortGroup::Localhost,
+                    label: "glassbook-frontend".into(),
+                    pid: 501,
+                    ports: vec![4206, 6006, 63643],
+                },
+                PortRow { group: PortGroup::Localhost, label: "axterio".into(), pid: 502, ports: vec![3000] },
+                PortRow { group: PortGroup::Claude, label: "axterio".into(), pid: 503, ports: vec![65067] },
+                PortRow {
+                    group: PortGroup::Claude,
+                    label: "ai-design-kit".into(),
+                    pid: 504,
+                    ports: vec![64033],
+                },
+                PortRow {
+                    group: PortGroup::Other,
+                    label: "ControlCenter".into(),
+                    pid: 505,
+                    ports: vec![5000, 7000],
+                },
             ],
             stale: false,
         }));
@@ -183,7 +202,7 @@ impl App {
     fn focused_len(&self) -> usize {
         match self.focus {
             Focus::Processes => self.visible_processes().len(),
-            Focus::Ports => self.slow.as_ref().map_or(0, |s| s.ports.len()),
+            Focus::Ports => self.slow.as_ref().map_or(0, |s| s.rows.len()),
         }
     }
 
@@ -195,6 +214,12 @@ impl App {
         self.fast.as_ref().map_or(&[], |f| {
             &f.processes[..f.processes.len().min(MAX_VISIBLE_PROCS)]
         })
+    }
+
+    /// Live CPU for an arbitrary pid — the ports card joins claude rows against
+    /// the fast tick. Unlike `visible_processes`, this searches the full list.
+    pub fn cpu_of(&self, pid: i32) -> Option<f32> {
+        self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -534,5 +559,18 @@ mod tests {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
         assert_eq!(a.selected, 9);
+    }
+
+    #[test]
+    fn cpu_of_finds_pids_beyond_the_visible_window() {
+        let mut a = App::new(false);
+        let mut f = demo_fast();
+        // More processes than MAX_VISIBLE_PROCS, with the target last.
+        f.processes = (0..MAX_VISIBLE_PROCS as i32 + 5)
+            .map(|i| ProcInfo { pid: 900 + i, name: format!("p{i}"), cpu: i as f32, mem: 0 })
+            .collect();
+        a.ingest(Snapshot::Fast(f));
+        assert_eq!(a.cpu_of(900 + MAX_VISIBLE_PROCS as i32 + 4), Some(14.0));
+        assert_eq!(a.cpu_of(1), None);
     }
 }

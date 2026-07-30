@@ -145,11 +145,8 @@ mod tests {
         assert_eq!(classify(&facts(None, None, true)), PortGroup::Other);
     }
 
-    // `PortInfo` still carries `project` at this point; Task 3 removes both the
-    // field and this line. Do not remove the field early — `slow.rs` still
-    // populates it until then and the crate would not build.
     fn pi(port: u16, process: &str, pid: i32) -> PortInfo {
-        PortInfo { port, process: process.to_string(), pid, project: None }
+        PortInfo { port, process: process.to_string(), pid }
     }
 
     #[test]
