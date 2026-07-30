@@ -5,30 +5,73 @@ use crate::app::{App, Focus};
 use crate::sampler::ports::{PortGroup, PortRow};
 use super::theme;
 
-/// Clip to `max` chars without splitting a char boundary.
-fn trunc(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
+/// Fixed field widths shared by the width budgeting below. `LABEL_WIDTH` is
+/// the desired (not guaranteed — see the localhost/other branch) label
+/// column; `CPU_WIDTH` is `"{:>5.1}%"` (or the `"—"` fallback formatted to
+/// match); `CLAUDE_PORT_PREFIX_WIDTH` is `" :{:<6}"`.
+const LABEL_WIDTH: usize = 20;
+const CPU_WIDTH: usize = 6;
+const CLAUDE_PORT_PREFIX_WIDTH: usize = 8;
+
+/// Terminal display width (cells), not char count — a CJK character costs 2
+/// cells, so counting chars overstates how much room is actually left and
+/// lets the real terminal clip content a width-aware budget thought was
+/// safe. Ratatui already computes this internally; reuse it instead of
+/// pulling in a new dependency.
+fn disp_width(s: &str) -> usize {
+    Span::from(s).width()
+}
+
+/// Right-pad `s` with spaces to `width` display cells. `s` must already fit
+/// within `width` (e.g. via `trunc`) — this only grows short strings, it
+/// never clips.
+fn pad_to_width(s: &str, width: usize) -> String {
+    let w = disp_width(s);
+    if w >= width {
         s.to_string()
     } else {
-        s.chars().take(max.saturating_sub(1)).chain(['…']).collect()
+        format!("{s}{}", " ".repeat(width - w))
     }
 }
 
+/// Clip to `max` display cells without splitting a char or a wide glyph.
+fn trunc(s: &str, max: usize) -> String {
+    if disp_width(s) <= max {
+        return s.to_string();
+    }
+    let budget = max.saturating_sub(1);
+    let mut out = String::new();
+    for ch in s.chars() {
+        let mut candidate = out.clone();
+        candidate.push(ch);
+        if disp_width(&candidate) > budget {
+            break;
+        }
+        out = candidate;
+    }
+    out.push('…');
+    out
+}
+
 /// Join `ports` as `:NNNN` tokens, never severing a number mid-digit. If they
-/// all fit inside `max_width`, that's the whole string; otherwise only whole
-/// tokens that fit within `max_width - 1` are kept, and a trailing ellipsis
-/// (always within budget) marks the cut instead of a severed number.
+/// all fit inside `max_width` display cells, that's the whole string;
+/// otherwise only whole tokens that fit within `max_width - 1` cells are
+/// kept, and a trailing ellipsis marks the cut instead of a severed number.
+/// The ellipsis is emitted whenever any token is dropped — even every token,
+/// at `max_width == 0` — because a row with hidden ports and no mark of it
+/// looks like a process listening on nothing, which is worse than a mark
+/// that overflows its allotted cell.
 fn ports_str(ports: &[u16], max_width: usize) -> String {
     let tokens: Vec<String> = ports.iter().map(|p| format!(":{p}")).collect();
     let joined = tokens.join(" ");
-    if joined.chars().count() <= max_width {
+    if disp_width(&joined) <= max_width {
         return joined;
     }
     let budget = max_width.saturating_sub(1);
     let mut out = String::new();
     for token in &tokens {
         let sep = usize::from(!out.is_empty());
-        if out.chars().count() + sep + token.chars().count() > budget {
+        if disp_width(&out) + sep + disp_width(token) > budget {
             break;
         }
         if !out.is_empty() {
@@ -36,9 +79,7 @@ fn ports_str(ports: &[u16], max_width: usize) -> String {
         }
         out.push_str(token);
     }
-    if max_width >= 1 {
-        out.push('…');
-    }
+    out.push('…');
     out
 }
 
@@ -88,12 +129,17 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // below that, the 80x24 layout gives this card only two content rows.
     let headers = inner.height >= 8;
     let visible_rows = inner.height as usize;
-    // The offset search's guard `offset < selected` relies on range_cost(offset..=selected)
-    // always fitting a header plus its row within visible_rows. This holds only because both
-    // headers and visible_rows are derived from inner.height: when headers=true, inner.height>=8
-    // guarantees visible_rows>=8, so a header+row always fits. If these are later decoupled
-    // (e.g. intermediate tier, reserved row), this assertion will catch the dependency break.
-    debug_assert!(!headers || visible_rows >= 2);
+    // The offset search's loop condition `range_cost(offset..=selected, headers) > visible_rows`
+    // only ever terminates because a single selected row plus its own header is guaranteed to
+    // fit the budget — otherwise `offset` could walk right past `selected` looking for a window
+    // that will never exist. Pin that invariant directly instead of the two inputs it's derived
+    // from (which can never disagree with each other, so asserting their relationship proves
+    // nothing about the search).
+    debug_assert!(
+        slow.rows.is_empty()
+            || range_cost(&slow.rows, app.selected.min(slow.rows.len() - 1), app.selected.min(slow.rows.len() - 1), headers)
+                <= visible_rows
+    );
     let offset = if focused {
         let selected = app.selected.min(slow.rows.len().saturating_sub(1));
         let mut offset = 0;
@@ -116,7 +162,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 match r.group {
                     PortGroup::Localhost => "localhost",
                     PortGroup::Claude => "claude sessions",
-                    PortGroup::Other => "other",
+                    PortGroup::Other => "others",
                 },
                 Style::default().fg(theme::DIM),
             ));
@@ -132,6 +178,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             Style::default().fg(theme::TEXT)
         };
         let mut spans: Vec<Span> = Vec::new();
+        let mut prefix_width = 0usize;
         if !headers {
             // Marker carries the group when there is no header to do it.
             let (glyph, colour) = match r.group {
@@ -140,25 +187,59 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 PortGroup::Other => ("○", theme::DIM),
             };
             spans.push(Span::styled(glyph, if selected { base } else { Style::default().fg(colour) }));
+            prefix_width += disp_width(glyph);
         }
-        spans.push(Span::styled(format!(" {:<20}", trunc(&r.label, 20)), base));
+        let total = inner.width as usize;
         match r.group {
             PortGroup::Claude => {
                 // Identity plus "is it working" — the port is the least useful
-                // column for an ephemeral session port, so it goes first only
-                // when there is width for headers.
-                if headers {
-                    spans.insert(0, Span::styled(format!(" :{:<6}", r.ports[0]), base.bold()));
+                // column for an ephemeral session port, so it's shown first,
+                // and only when there is width for headers. Budget the whole
+                // row against `total` before committing to any of it: drop
+                // the port prefix first, then the CPU column entirely, rather
+                // than let either get clipped mid-value — a dropped column
+                // is honest, a severed number is not.
+                let label_field_width = 1 + LABEL_WIDTH; // leading space + label
+                let port_prefix_width = if headers { CLAUDE_PORT_PREFIX_WIDTH } else { 0 };
+                let mut show_port_prefix = headers;
+                let mut show_cpu = true;
+                if prefix_width + port_prefix_width + label_field_width + CPU_WIDTH > total {
+                    show_port_prefix = false;
                 }
-                let cpu = app.cpu_of(r.pid).unwrap_or(0.0);
+                if prefix_width + label_field_width + CPU_WIDTH > total {
+                    show_cpu = false;
+                }
+                if show_port_prefix {
+                    spans.push(Span::styled(format!(" :{:<6}", r.ports[0]), base.bold()));
+                }
                 spans.push(Span::styled(
-                    format!("{cpu:>5.1}%"),
-                    if selected { base } else { Style::default().fg(theme::ACCENT) },
+                    format!(" {}", pad_to_width(&trunc(&r.label, LABEL_WIDTH), LABEL_WIDTH)),
+                    base,
                 ));
+                if show_cpu {
+                    let cpu_text = match app.cpu_of(r.pid) {
+                        Some(cpu) => format!("{cpu:>5.1}%"),
+                        None => format!("{:>5}%", "—"),
+                    };
+                    spans.push(Span::styled(
+                        cpu_text,
+                        if selected { base } else { Style::default().fg(theme::ACCENT) },
+                    ));
+                }
             }
             _ => {
-                let used: usize = spans.iter().map(|s| s.content.chars().count()).sum();
-                let avail = (inner.width as usize).saturating_sub(used);
+                // Shrink the label field, if need be, to guarantee at least
+                // one cell for the port list — enough for `ports_str` to
+                // show its ellipsis instead of the row silently claiming
+                // zero ports.
+                let avail_for_label_and_ports = total.saturating_sub(prefix_width + 1);
+                let label_width = LABEL_WIDTH.min(avail_for_label_and_ports.saturating_sub(1));
+                spans.push(Span::styled(
+                    format!(" {}", pad_to_width(&trunc(&r.label, label_width), label_width)),
+                    base,
+                ));
+                let used: usize = spans.iter().map(|s| disp_width(&s.content)).sum();
+                let avail = total.saturating_sub(used);
                 spans.push(Span::styled(
                     ports_str(&r.ports, avail),
                     if selected { base } else { Style::default().fg(theme::ACCENT) },
@@ -242,6 +323,9 @@ mod tests {
         let local = rows.find("localhost").expect("localhost header missing");
         let claude = rows.find("claude").expect("claude header missing");
         let other = rows.find("other").expect("others header missing");
+        // Exact match, not substring — "other" is a substring of "others" so
+        // `.find("other")` alone can't tell them apart.
+        assert_eq!(&rows[other..other + "others".len()], "others", "header must read \"others\"");
         assert!(local < claude && claude < other, "headers must be localhost, claude, others");
     }
 
@@ -270,9 +354,11 @@ mod tests {
         // how far to scroll because it never charges for header lines. Cover
         // a spread of budgets and selections, including the very last row,
         // and require the selected row's own label to actually be on
-        // screen — not just that *some* row rendered.
+        // screen — not just that *some* row rendered. Covers 4..7 (compact,
+        // no headers) as well as 8..14 (full tier, headers on) — the
+        // original range only covered the headers-on path.
         let rows = scroll_test_rows();
-        for visible_rows in 8u16..=14 {
+        for visible_rows in 4u16..=14 {
             for &selected in &[0usize, 3, 4, 7, 8, 9] {
                 let app = app_with_rows(rows.clone(), selected);
                 let out = draw_app(&app, 46, visible_rows + 2).join("\n");
@@ -383,5 +469,174 @@ mod tests {
             line.trim_end_matches(['│', ' ']).ends_with('…'),
             "a line that can't fit its ports should end in an ellipsis: {line:?}"
         );
+    }
+
+    /// One row per group, sized to fit comfortably at 46 columns — used to
+    /// exercise the compact claude/other branches that
+    /// `ports_render_in_full_when_they_fit`'s 4-content-row demo card never
+    /// reaches.
+    fn one_row_per_group() -> Vec<PortRow> {
+        vec![
+            PortRow { group: PortGroup::Localhost, label: "web".into(), pid: 601, ports: vec![3000] },
+            PortRow { group: PortGroup::Claude, label: "claude-proj".into(), pid: 602, ports: vec![4001] },
+            PortRow { group: PortGroup::Other, label: "syslogd".into(), pid: 603, ports: vec![5001] },
+        ]
+    }
+
+    #[test]
+    fn compact_claude_row_shows_cpu_and_drops_its_port() {
+        // The 4-content-row demo card at h=6 only ever shows localhost rows
+        // (see `ports_render_in_full_when_they_fit`'s comment), so the
+        // compact claude branch has never actually been rendered by a test.
+        let app = app_with_rows(one_row_per_group(), 0);
+        let text = draw_app(&app, 46, 6);
+        let line = text.iter().find(|l| l.contains("claude-proj")).expect("claude row missing");
+        assert!(line.contains('%'), "compact claude row should still show its CPU: {line}");
+        assert!(
+            port_tokens(line).is_empty(),
+            "compact claude row must not show its port (full tier only): {line}"
+        );
+    }
+
+    #[test]
+    fn compact_other_row_renders_its_ports() {
+        let app = app_with_rows(one_row_per_group(), 0);
+        let text = draw_app(&app, 46, 6);
+        let line = text.iter().find(|l| l.contains("syslogd")).expect("other row missing");
+        assert_eq!(port_tokens(line), vec![5001], "other row should render its port: {line}");
+    }
+
+    #[test]
+    fn compact_markers_map_to_the_correct_group_colour() {
+        // `compact_tier_drops_headers_and_uses_markers` only checks that a
+        // '●' appears somewhere — it can't tell claude's '○' apart from
+        // other's '○'. Check the actual cell colour at each marker. Select
+        // an out-of-range row so nothing is highlighted — a selected
+        // marker's colour is overridden by the highlight style, not its
+        // group colour.
+        let app = app_with_rows(one_row_per_group(), 99);
+        let mut t = Terminal::new(TestBackend::new(46, 6)).unwrap();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let lines: Vec<String> =
+            (0..6u16).map(|y| (0..46u16).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect();
+
+        let row_y = |needle: &str| {
+            lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle} row missing")) as u16
+        };
+        let marker_fg = |y: u16| {
+            (0..46u16)
+                .find_map(|x| {
+                    let cell = &buf[(x, y)];
+                    matches!(cell.symbol(), "●" | "○").then(|| cell.style().fg.unwrap())
+                })
+                .unwrap_or_else(|| panic!("no marker glyph found on row {y}"))
+        };
+
+        assert_eq!(marker_fg(row_y("web")), super::theme::ACCENT, "localhost marker should be ACCENT");
+        assert_eq!(marker_fg(row_y("claude-proj")), super::theme::TEXT, "claude marker should be TEXT");
+        assert_eq!(marker_fg(row_y("syslogd")), super::theme::DIM, "other marker should be DIM");
+    }
+
+    #[test]
+    fn claude_row_shows_dash_for_unknown_cpu_not_a_false_zero() {
+        // demo()'s pid 504 (ai-design-kit) has no matching fast-snapshot
+        // process, so its CPU is unknown. `unwrap_or(0.0)` used to render
+        // that as a confident "0.0%" — indistinguishable from an idle
+        // process that really is at 0%.
+        let text = draw(46, 14).join("\n");
+        let line = text.lines().find(|l| l.contains("ai-design-kit")).expect("row missing");
+        assert!(line.contains('—'), "unknown CPU should render as —: {line}");
+        assert!(!line.contains("0.0%"), "unknown CPU must not render as a false 0.0%: {line}");
+    }
+
+    #[test]
+    fn claude_cpu_column_is_never_severed_at_odd_terminal_sizes() {
+        // Reviewer-verified regression: the claude row used to render a
+        // fixed ~35-column layout with no width check, so ratatui clipped
+        // the CPU value mid-digit — 57x40 showed "12", 60x40 showed "12.4"
+        // with no "%". The column must now be all-or-nothing: the whole
+        // "12.4%" or nothing, never a partial number.
+        for (w, h) in [(57u16, 40u16), (60u16, 40u16)] {
+            let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+            t.draw(|f| crate::ui::draw(f, &App::demo())).unwrap();
+            let buf = t.backend().buffer().clone();
+            let lines: Vec<String> =
+                (0..h).map(|y| (0..w).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect();
+            let header_idx = lines
+                .iter()
+                .position(|l| l.contains("claude sessions"))
+                .unwrap_or_else(|| panic!("{w}x{h}: claude sessions header missing"));
+            // demo()'s first claude row (pid 503, "axterio", 12.4% CPU)
+            // immediately follows its group header.
+            let axterio_line = &lines[header_idx + 1];
+            let suffix = axterio_line.split("axterio").last().unwrap();
+            let trimmed = suffix.trim_end_matches(['│', ' ']).trim();
+            assert!(
+                trimmed.is_empty() || trimmed == "12.4%",
+                "{w}x{h}: claude CPU severed instead of shown whole or dropped: {trimmed:?} in {axterio_line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn compact_claude_cpu_column_is_dropped_whole_when_it_cannot_fit() {
+        // Reviewer-verified regression: compact 28x6 rendered "12."; 26x6
+        // rendered "1". At 26 columns there's no room for the full "12.4%",
+        // so it must be dropped entirely rather than clipped.
+        let text = draw(26, 6).join("\n");
+        let line = text.lines().find(|l| l.contains("axterio")).expect("claude row missing");
+        assert!(!line.contains('%'), "CPU should be dropped whole, not clipped: {line:?}");
+    }
+
+    #[test]
+    fn cjk_label_width_is_measured_in_cells_not_chars() {
+        // Reviewer-verified regression: counting chars instead of display
+        // cells overstated remaining width for a CJK label, so the terminal
+        // clipped the port list *after* `ports_str` had already decided
+        // everything fit and appended nothing — label
+        // "项目名称测试项目名称" (10 chars, 20 cells) with ports
+        // 3000/3001/3002/63643 at 46 columns rendered ":3000 :3001" with no
+        // ellipsis.
+        let rows = vec![PortRow {
+            group: PortGroup::Localhost,
+            label: "项目名称测试项目名称".into(),
+            pid: 900,
+            ports: vec![3000, 3001, 3002, 63643],
+        }];
+        let app = app_with_rows(rows.clone(), 0);
+        let text = draw_app(&app, 46, 6);
+        let line = text.iter().find(|l| l.contains('项')).expect("row missing");
+
+        let shown = port_tokens(line);
+        assert!(shown.len() < rows[0].ports.len(), "expected a cut, but everything fit: {line:?}");
+        for p in &shown {
+            assert!(
+                rows[0].ports.contains(p),
+                "port {p} isn't one of the row's real ports — looks like a severed number: {line:?}"
+            );
+        }
+        assert!(
+            line.trim_end_matches(['│', ' ']).ends_with('…'),
+            "a cut CJK-labelled port list must end in an ellipsis: {line:?}"
+        );
+    }
+
+    #[test]
+    fn extremely_narrow_rows_still_signal_a_cut_with_ellipsis() {
+        // Reviewer-verified regression: at 22x6 the localhost row's 3 ports
+        // vanished with no `…` — a process with hidden ports rendered
+        // indistinguishably from one listening on nothing. At 18x6 the
+        // label itself was severed ("glassbook-fron") with no ellipsis
+        // either.
+        for (w, h) in [(22u16, 6u16), (18u16, 6u16)] {
+            let text = draw(w, h);
+            let line = text.iter().find(|l| l.contains("glassbook")).expect("row missing");
+            let trimmed = line.trim_end_matches(['│', ' ']);
+            assert!(
+                trimmed.ends_with('…'),
+                "{w}x{h}: a row that can't show its full label/ports must end in an ellipsis: {line:?}"
+            );
+        }
     }
 }
