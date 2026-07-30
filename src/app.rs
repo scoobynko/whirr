@@ -271,13 +271,28 @@ impl App {
                 self.sort_by = SortBy::Mem;
                 self.sort_procs();
             }
-            KeyCode::Char('k') => {
-                if matches!(self.focus, Focus::Processes) {
+            KeyCode::Char('k') => match self.focus {
+                Focus::Processes => {
                     if let Some(p) = self.visible_processes().get(self.selected) {
                         self.pending_kill = Some((p.pid, p.name.clone()));
                     }
                 }
-            }
+                // Only dev servers are killable. Ending a Claude session
+                // mid-conversation or a system agent by a stray keypress is
+                // not a thing this should make easy.
+                Focus::Ports => {
+                    if let Some(r) = self
+                        .slow
+                        .as_ref()
+                        .and_then(|s| s.rows.get(self.selected))
+                        .filter(|r| r.group == crate::sampler::ports::PortGroup::Localhost)
+                    {
+                        let n = r.ports.len();
+                        let ports = if n == 1 { "port" } else { "ports" };
+                        self.pending_kill = Some((r.pid, format!("{} ({n} {ports})", r.label)));
+                    }
+                }
+            },
             _ => {}
         }
     }
@@ -572,5 +587,36 @@ mod tests {
         a.ingest(Snapshot::Fast(f));
         assert_eq!(a.cpu_of(900 + MAX_VISIBLE_PROCS as i32 + 4), Some(14.0));
         assert_eq!(a.cpu_of(1), None);
+    }
+
+    fn press(a: &mut App, c: char) {
+        a.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn kill_works_on_a_localhost_port_row() {
+        let mut a = App::demo();
+        a.focus = Focus::Ports;
+        a.selected = 0; // demo()'s first row is localhost/glassbook-frontend
+        press(&mut a, 'k');
+        let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
+        assert_eq!(pid, 501);
+        assert!(label.contains("glassbook-frontend"), "dialog should name the process: {label}");
+        assert!(label.contains('3'), "dialog should say how many ports die with it: {label}");
+    }
+
+    #[test]
+    fn kill_is_inert_on_claude_and_other_rows() {
+        for idx in [2usize, 4] {
+            // demo() row 2 is a claude session, row 4 is ControlCenter.
+            let mut a = App::demo();
+            a.focus = Focus::Ports;
+            a.selected = idx;
+            press(&mut a, 'k');
+            assert!(
+                a.pending_kill.is_none(),
+                "row {idx} must not be killable — a stray k must not end a session or a system agent"
+            );
+        }
     }
 }
