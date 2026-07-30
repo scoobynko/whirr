@@ -219,7 +219,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 if show_cpu {
                     let cpu_text = match app.cpu_of(r.pid) {
                         Some(cpu) => format!("{cpu:>5.1}%"),
-                        None => format!("{:>5}%", "—"),
+                        None => format!("{:>6}", "—"),
                     };
                     spans.push(Span::styled(
                         cpu_text,
@@ -234,14 +234,22 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 // zero ports.
                 let avail_for_label_and_ports = total.saturating_sub(prefix_width + 1);
                 let label_width = LABEL_WIDTH.min(avail_for_label_and_ports.saturating_sub(1));
+                let truncated_label = trunc(&r.label, label_width);
+                let label_was_truncated = truncated_label.ends_with('…');
                 spans.push(Span::styled(
-                    format!(" {}", pad_to_width(&trunc(&r.label, label_width), label_width)),
+                    format!(" {}", pad_to_width(&truncated_label, label_width)),
                     base,
                 ));
                 let used: usize = spans.iter().map(|s| disp_width(&s.content)).sum();
                 let avail = total.saturating_sub(used);
+                let mut ports_output = ports_str(&r.ports, avail);
+                // Suppress the ports ellipsis if the label was already truncated,
+                // to avoid doubled ellipsis at narrow widths.
+                if label_was_truncated && ports_output.ends_with('…') {
+                    ports_output.pop();
+                }
                 spans.push(Span::styled(
-                    ports_str(&r.ports, avail),
+                    ports_output,
                     if selected { base } else { Style::default().fg(theme::ACCENT) },
                 ));
             }
@@ -491,7 +499,8 @@ mod tests {
         let app = app_with_rows(one_row_per_group(), 0);
         let text = draw_app(&app, 46, 6);
         let line = text.iter().find(|l| l.contains("claude-proj")).expect("claude row missing");
-        assert!(line.contains('%'), "compact claude row should still show its CPU: {line}");
+        // CPU field should be present: either "12.4%" for known CPU or "—" for unknown
+        assert!(line.contains('%') || line.contains('—'), "compact claude row should show its CPU: {line}");
         assert!(
             port_tokens(line).is_empty(),
             "compact claude row must not show its port (full tier only): {line}"
@@ -546,8 +555,15 @@ mod tests {
         // process that really is at 0%.
         let text = draw(46, 14).join("\n");
         let line = text.lines().find(|l| l.contains("ai-design-kit")).expect("row missing");
-        assert!(line.contains('—'), "unknown CPU should render as —: {line}");
-        assert!(!line.contains("0.0%"), "unknown CPU must not render as a false 0.0%: {line}");
+        // Extract the CPU field: it's the rightmost 6-char field before any border
+        let trimmed = line.trim_end_matches(['│', ' ']);
+        let cpu_field = if trimmed.len() >= 6 {
+            &trimmed[trimmed.len() - 6..]
+        } else {
+            trimmed
+        };
+        assert!(cpu_field.contains('—'), "unknown CPU should render as —: {cpu_field:?} from {line}");
+        assert!(!cpu_field.contains('%'), "unknown CPU field must not contain %: {cpu_field:?} from {line}");
     }
 
     #[test]
@@ -637,6 +653,49 @@ mod tests {
                 trimmed.ends_with('…'),
                 "{w}x{h}: a row that can't show its full label/ports must end in an ellipsis: {line:?}"
             );
+        }
+    }
+
+    #[test]
+    fn no_doubled_ellipsis_when_both_label_and_ports_truncated() {
+        // At 22 columns, both the label truncation and the port list
+        // truncation would independently append ellipsis, producing "……" which
+        // looks like a rendering glitch. When the label was already truncated,
+        // suppress the ports ellipsis to keep just one.
+        let text = draw(22, 6);
+        let line = text.iter().find(|l| l.contains("glassbook")).expect("row missing");
+        let content = line.trim_end_matches(['│', ' ']);
+        let ellipsis_count = content.matches('…').count();
+        assert_eq!(
+            ellipsis_count, 1,
+            "row with both label and ports truncated must have exactly one ellipsis: {line:?}"
+        );
+    }
+
+    #[test]
+    #[ignore]
+    fn _render_defects_before_after() {
+        // For manual verification of fixes. Run with: cargo test --lib _render_defects -- --ignored --nocapture
+        println!("\n=== DEFECT 1 at 46x14 (full tier) ===");
+        let lines = draw(46, 14);
+        for line in &lines {
+            if line.contains("ai-design-kit") {
+                println!("{}", line);
+            }
+        }
+        println!("\n=== DEFECT 1 at 46x6 (compact tier) ===");
+        let lines = draw(46, 6);
+        for line in &lines {
+            if line.contains("ai-design-kit") {
+                println!("{}", line);
+            }
+        }
+        println!("\n=== DEFECT 2 at 22x6 (doubled ellipsis) ===");
+        let lines = draw(22, 6);
+        for line in &lines {
+            if line.contains("glassbook") {
+                println!("{}", line);
+            }
         }
     }
 }
