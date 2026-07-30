@@ -1,5 +1,6 @@
 mod fast;
 mod medium;
+pub mod ports;
 mod slow;
 
 use std::sync::mpsc::Sender;
