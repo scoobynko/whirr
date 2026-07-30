@@ -152,7 +152,10 @@ pub fn run(tx: Sender<Snapshot>) {
         let snap = match output {
             Ok(out) if out.status.success() || !out.stdout.is_empty() => {
                 let mut ports = parse_lsof(&String::from_utf8_lossy(&out.stdout));
-                enrich_projects(&mut ports, crate::mac::proc::cwd_basename);
+                enrich_projects(&mut ports, |pid| {
+                    crate::mac::proc::cwd(pid)
+                        .and_then(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+                });
                 apply_smart_labels(&mut ports, crate::mac::proc::args);
                 last_good = ports;
                 SlowSnap { ports: last_good.clone(), stale: false }

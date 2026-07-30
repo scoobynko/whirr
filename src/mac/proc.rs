@@ -180,9 +180,10 @@ struct ProcVnodePathInfo {
     pvi_rdir: VnodeInfoPath,
 }
 
-/// Basename of `pid`'s current working directory. `None` for pids we may
-/// not inspect (other users), dead pids, `/`, or any FFI failure.
-pub fn cwd_basename(pid: i32) -> Option<String> {
+/// `pid`'s current working directory, absolute. `None` for pids we may not
+/// inspect (other users), dead pids, `/`, or any FFI failure. The full path is
+/// returned rather than a basename because callers need to test it for `.git`.
+pub fn cwd(pid: i32) -> Option<std::path::PathBuf> {
     let mut info: ProcVnodePathInfo = unsafe { std::mem::zeroed() };
     let sz = std::mem::size_of::<ProcVnodePathInfo>() as libc::c_int;
     let r = unsafe {
@@ -203,9 +204,7 @@ pub fn cwd_basename(pid: i32) -> Option<String> {
     if s.is_empty() || s == "/" {
         return None;
     }
-    std::path::Path::new(s)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+    Some(std::path::PathBuf::from(s))
 }
 
 fn read_name(pid: i32) -> String {
@@ -318,20 +317,21 @@ mod tests {
     }
 
     #[test]
-    fn cwd_basename_of_self_matches_current_dir() {
-        let expect = std::env::current_dir()
-            .unwrap()
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let got = super::cwd_basename(std::process::id() as i32).expect("own cwd readable");
-        assert_eq!(got, expect);
+    fn cwd_of_self_is_the_full_current_dir() {
+        let want = std::env::current_dir().expect("cwd readable");
+        let got = super::cwd(std::process::id() as i32).expect("own cwd readable");
+        // Compare canonicalised: /tmp is a symlink to /private/tmp on macOS.
+        assert_eq!(
+            got.canonicalize().unwrap(),
+            want.canonicalize().unwrap(),
+            "expected the full path, not a basename"
+        );
+        assert!(got.is_absolute(), "must be absolute so .git can be tested");
     }
 
     #[test]
-    fn cwd_basename_of_dead_pid_is_none() {
-        assert_eq!(super::cwd_basename(-1), None);
+    fn cwd_of_dead_pid_is_none() {
+        assert_eq!(super::cwd(-1), None);
     }
 
     #[test]
