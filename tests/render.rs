@@ -40,13 +40,15 @@ fn renders_at_all_sizes_without_panic() {
 #[test]
 fn full_size_shows_all_panels() {
     let c = draw_at(160, 45);
-    for needle in ["CPU", "Temp", "Power", "Memory", "Processes", "Network", "Ports"] {
+    // At >=120 columns the body splits into three side-by-side cards
+    // (localhost, claude sessions, others) instead of the single grouped
+    // "Ports" card — see `three_cards_render_side_by_side_at_full_width`.
+    for needle in [
+        "CPU", "Temp", "Power", "Memory", "Processes", "Network",
+        "localhost", "claude sessions", "others",
+    ] {
         assert!(c.contains(needle), "missing {needle}");
     }
-    // The old flat ports list had a "(project)" badge; ports are now grouped
-    // by purpose, so assert the full-tier group header and a row render
-    // instead of that now-nonexistent badge.
-    assert!(c.contains("localhost"), "port group header missing");
     assert!(c.contains("glassbook-frontend"), "port row missing");
 }
 
@@ -87,35 +89,34 @@ fn stock_80x24_fits_without_starving_header_or_ports() {
     assert_eq!(lines.len() - 1, ports_row + 3, "ports card should occupy exactly its Min(4) floor");
 }
 
-// At a generous body height the process table should claim its full
-// Max(13) cap rather than something smaller, and ports should get the
-// remainder (well above its Min(4) floor) — the mirror case of the 80x24
-// test above, confirming Max(13) behaves like a real cap, not a shrink-to-0.
+// At >=120 columns, `three_cards` is always active (it only checks width),
+// so the old single-Ports-card body split (Max(13)/Min(4)) can no longer
+// coexist with the full-tier header/gauges (which also require width>=120)
+// — that scenario the pre-three-cards suite exercised here no longer
+// exists. What replaces it: the three-card row is `Length(6)` (4 content
+// rows) when the body has room, but shrinks below that at tight heights
+// (120x30 gets only 2 — see the three-card layout tests below). At a
+// generous body height all four of `demo()`'s sessions should fit, proving
+// the row actually reached its full 4 content rows rather than staying
+// shrunk to the 120x30 case's 2.
 #[test]
-fn large_size_gives_process_table_its_full_cap() {
-    let lines = draw_grid(160, 45);
-    assert_eq!(lines.len(), 45);
-
-    // Full tier: header 9 rows, gauges 12 rows, so the body (and the
-    // process table inside it) starts at row 21.
-    let processes_row = row_of(&lines, "Processes");
-    assert_eq!(processes_row, 21, "process table didn't start where the full-tier body begins");
-
-    let ports_row = row_of(&lines, "Ports");
-    assert_eq!(ports_row - processes_row, 13, "process table should claim its full Max(13) cap when there's room");
-    // Body height here is 24 (45 - 9 - 12), so ports gets 24 - 13 = 11 rows,
-    // comfortably above its Min(4) floor.
-    assert_eq!(44 - ports_row + 1, 11, "ports should get the remaining 11 rows, not just its Min(4) floor");
+fn large_size_gives_the_three_card_row_its_full_height() {
+    let c = draw_at(160, 45);
+    for tty in ["ttys020", "ttys021", "ttys004"] {
+        assert!(c.contains(tty), "missing {tty} — three-card row didn't reach its full height");
+    }
+    assert!(c.contains("eye-claudius"), "fourth demo session missing at large size");
 }
 
-// The ports card lives in the LEFT column under the process table, not in a
-// full-width bottom row: on the terminal row where the ports panel's title
-// border is drawn, the rightmost cell must belong to the network panel's
-// right border ('│'), not a ports corner ('╮'), which is what a full-width
-// ports row would put there.
+// Below the 120-column three-card threshold, the ports card lives in the
+// LEFT column under the process table, not in a full-width bottom row: on
+// the terminal row where the ports panel's title border is drawn, the
+// rightmost cell must belong to the network panel's right border ('│'),
+// not a ports corner ('╮'), which is what a full-width ports row would put
+// there.
 #[test]
 fn ports_card_sits_under_processes_not_full_width() {
-    let (w, h) = (160u16, 45u16);
+    let (w, h) = (100u16, 45u16);
     let flat = draw_at(w, h);
     let cells: Vec<char> = flat.chars().collect();
     let lines: Vec<String> = cells
@@ -133,6 +134,20 @@ fn ports_card_sits_under_processes_not_full_width() {
         "ports title row should end inside the network panel's right border, \
          got {last_char:?} (full-width ports row?)"
     );
+}
+
+#[test]
+fn three_cards_render_side_by_side_at_full_width() {
+    let c = draw_at(120, 40);
+    for title in ["localhost", "claude", "others"] {
+        assert!(c.contains(title), "card title {title:?} missing at 120x40");
+    }
+}
+
+#[test]
+fn narrow_terminals_get_the_single_grouped_card() {
+    let c = draw_at(80, 24);
+    assert!(c.contains("Ports"), "the grouped Ports card should render below 120 cols");
 }
 
 #[test]

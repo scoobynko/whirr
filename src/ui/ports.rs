@@ -35,7 +35,7 @@ fn pad_to_width(s: &str, width: usize) -> String {
 }
 
 /// Clip to `max` display cells without splitting a char or a wide glyph.
-fn trunc(s: &str, max: usize) -> String {
+pub(crate) fn trunc(s: &str, max: usize) -> String {
     if disp_width(s) <= max {
         return s.to_string();
     }
@@ -87,7 +87,7 @@ fn ports_str(ports: &[u16], max_width: usize) -> String {
 /// plus one per group transition inside the range — the first row's group
 /// always counts as a transition, since it starts a fresh header. Headers
 /// cost nothing when disabled (compact tier).
-fn range_cost(rows: &[PortRow], start: usize, end: usize, headers: bool) -> usize {
+fn range_cost(rows: &[&PortRow], start: usize, end: usize, headers: bool) -> usize {
     let slice = &rows[start..=end];
     if !headers {
         return slice.len();
@@ -104,19 +104,30 @@ fn range_cost(rows: &[PortRow], start: usize, end: usize, headers: bool) -> usiz
     cost
 }
 
-pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let focused = matches!(app.focus, Focus::Ports);
+/// Shared row renderer. `rows` is already filtered and ordered; `headers`
+/// controls whether group header lines are emitted (only the combined
+/// fallback card wants them — a single-group card's title already says which
+/// group it is).
+fn render_rows(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    title: &str,
+    focused: bool,
+    rows: &[&PortRow],
+    headers: bool,
+) {
     let stale = app.slow.as_ref().is_some_and(|s| s.stale);
-    let title = if stale { "Ports ⟳ stale" } else { "Ports" };
-    let block = theme::panel_block(title, focused);
+    let full_title = if stale { format!("{title} ⟳ stale") } else { title.to_string() };
+    let block = theme::panel_block(&full_title, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let Some(slow) = app.slow.as_ref() else {
+    if app.slow.is_none() {
         f.render_widget(Paragraph::new("scanning…").style(Style::default().fg(theme::DIM)), inner);
         return;
-    };
-    if slow.rows.is_empty() {
+    }
+    if rows.is_empty() {
         f.render_widget(
             Paragraph::new("no listening ports").style(Style::default().fg(theme::DIM)),
             inner,
@@ -127,7 +138,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Headers cost a row each, which the compact tier cannot spare; there it
     // uses a per-row marker instead. 8 rows of inner height is the threshold —
     // below that, the 80x24 layout gives this card only two content rows.
-    let headers = inner.height >= 8;
+    let headers = headers && inner.height >= 8;
     let visible_rows = inner.height as usize;
     // The offset search's loop condition `range_cost(offset..=selected, headers) > visible_rows`
     // only ever terminates because a single selected row plus its own header is guaranteed to
@@ -136,14 +147,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // from (which can never disagree with each other, so asserting their relationship proves
     // nothing about the search).
     debug_assert!(
-        slow.rows.is_empty()
-            || range_cost(&slow.rows, app.selected.min(slow.rows.len() - 1), app.selected.min(slow.rows.len() - 1), headers)
+        rows.is_empty()
+            || range_cost(rows, app.selected.min(rows.len() - 1), app.selected.min(rows.len() - 1), headers)
                 <= visible_rows
     );
     let offset = if focused {
-        let selected = app.selected.min(slow.rows.len().saturating_sub(1));
+        let selected = app.selected.min(rows.len().saturating_sub(1));
         let mut offset = 0;
-        while offset < selected && range_cost(&slow.rows, offset, selected, headers) > visible_rows {
+        while offset < selected && range_cost(rows, offset, selected, headers) > visible_rows {
             offset += 1;
         }
         offset
@@ -153,7 +164,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let mut lines: Vec<Line> = Vec::new();
     let mut last_group: Option<PortGroup> = None;
-    for (i, r) in slow.rows.iter().enumerate().skip(offset) {
+    for (i, r) in rows.iter().copied().enumerate().skip(offset) {
         if lines.len() >= visible_rows {
             break;
         }
@@ -259,6 +270,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+/// Dev servers. Killable; see `App::on_key`.
+pub fn render_localhost(f: &mut Frame, area: Rect, app: &App) {
+    let rows = app.localhost_rows();
+    render_rows(f, area, app, "localhost", matches!(app.focus, Focus::Localhost), &rows, false);
+}
+
+/// Background agents and apps.
+pub fn render_others(f: &mut Frame, area: Rect, app: &App) {
+    let rows = app.other_rows();
+    render_rows(f, area, app, "others", matches!(app.focus, Focus::Others), &rows, false);
+}
+
+/// Narrow-terminal fallback: all groups in one card, with headers.
+pub fn render(f: &mut Frame, area: Rect, app: &App) {
+    let rows: Vec<&PortRow> = app.slow.as_ref().map(|s| s.rows.iter().collect()).unwrap_or_default();
+    render_rows(f, area, app, "Ports", matches!(app.focus, Focus::Localhost), &rows, true);
+}
+
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
@@ -287,7 +316,7 @@ mod tests {
     /// `App::demo()`'s five rows (too few to reproduce a scroll).
     fn app_with_rows(rows: Vec<PortRow>, selected: usize) -> App {
         let mut app = App::new(false);
-        app.focus = Focus::Ports;
+        app.focus = Focus::Localhost;
         app.ingest(Snapshot::Slow(SlowSnap { rows, sessions: Vec::new(), stale: false }));
         app.selected = selected;
         app

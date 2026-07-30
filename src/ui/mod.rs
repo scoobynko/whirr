@@ -7,6 +7,7 @@ pub mod network;
 pub mod ports;
 pub mod power;
 pub mod processes;
+pub mod sessions;
 pub mod spark;
 pub mod temp;
 pub mod theme;
@@ -19,6 +20,18 @@ use crate::app::{App, MAX_VISIBLE_PROCS};
 /// tight: ports first, then network, then power, then temp — processes and
 /// CPU always survive. The gauges row splits into as many equal columns as
 /// there are visible gauge panels (cpu + temp? + power? + memory).
+///
+/// The body below the gauges has two shapes:
+///
+/// - **Width >= 120** (`three_cards`): the body splits into two rows —
+///   processes (with network alongside it, if it fits) on top, and three
+///   equal-width cards (localhost, claude sessions, others) in a fixed-height
+///   row below. Splitting the three port/session groups into their own cards
+///   is only worth the width when each can show a useful number of rows; below
+///   120 columns they would be too cramped to read.
+/// - **Narrower**: the single-card `render_left_column` shape below, with the
+///   grouped `ports::render` card (all three groups, headers, in one card)
+///   standing in for the three-card row.
 ///
 /// The body below the gauges splits into a left column (processes stacked
 /// over ports) and a right column (network at full body height). Within the
@@ -76,7 +89,31 @@ pub fn draw(f: &mut Frame, app: &App) {
     memory::render(f, gauges[gi], app);
 
     let body = chunks[2];
-    if show_network {
+    // Three side-by-side cards need ~40 columns each; below that the single
+    // grouped Ports card carries all three groups instead.
+    let three_cards = area.width >= 120;
+    if three_cards {
+        // Row A holds processes and network; row B the three cards. Row B gets
+        // a fixed 6 (2 borders + 4 rows) where there is room, else a third.
+        let rows = Layout::vertical([Constraint::Min(5), Constraint::Length(6)]).split(body);
+        if show_network {
+            let cols = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
+                .split(rows[0]);
+            processes::render(f, cols[0], app);
+            network::render(f, cols[1], app);
+        } else {
+            processes::render(f, rows[0], app);
+        }
+        let cards = Layout::horizontal([
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+            Constraint::Ratio(1, 3),
+        ])
+        .split(rows[1]);
+        ports::render_localhost(f, cards[0], app);
+        sessions::render(f, cards[1], app);
+        ports::render_others(f, cards[2], app);
+    } else if show_network {
         let cols = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
             .split(body);
         render_left_column(f, cols[0], app, show_ports);
