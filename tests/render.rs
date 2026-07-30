@@ -43,7 +43,11 @@ fn full_size_shows_all_panels() {
     for needle in ["CPU", "Temp", "Power", "Memory", "Processes", "Network", "Ports"] {
         assert!(c.contains(needle), "missing {needle}");
     }
-    assert!(c.contains("(my-app)"), "port project badge missing");
+    // The old flat ports list had a "(project)" badge; ports are now grouped
+    // by purpose, so assert the full-tier group header and a row render
+    // instead of that now-nonexistent badge.
+    assert!(c.contains("localhost"), "port group header missing");
+    assert!(c.contains("glassbook-frontend"), "port row missing");
 }
 
 #[test]
