@@ -180,9 +180,10 @@ struct ProcVnodePathInfo {
     pvi_rdir: VnodeInfoPath,
 }
 
-/// Basename of `pid`'s current working directory. `None` for pids we may
-/// not inspect (other users), dead pids, `/`, or any FFI failure.
-pub fn cwd_basename(pid: i32) -> Option<String> {
+/// `pid`'s current working directory, absolute. `None` for pids we may not
+/// inspect (other users), dead pids, `/`, or any FFI failure. The full path is
+/// returned rather than a basename because callers need to test it for `.git`.
+pub fn cwd(pid: i32) -> Option<std::path::PathBuf> {
     let mut info: ProcVnodePathInfo = unsafe { std::mem::zeroed() };
     let sz = std::mem::size_of::<ProcVnodePathInfo>() as libc::c_int;
     let r = unsafe {
@@ -203,9 +204,7 @@ pub fn cwd_basename(pid: i32) -> Option<String> {
     if s.is_empty() || s == "/" {
         return None;
     }
-    std::path::Path::new(s)
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
+    Some(std::path::PathBuf::from(s))
 }
 
 fn read_name(pid: i32) -> String {
@@ -280,6 +279,110 @@ pub fn args(pid: i32) -> Option<ProcArgs> {
     Some(ProcArgs { exec_path, argv })
 }
 
+// PROC_PIDTBSDINFO flavor; `proc_pidinfo` returns the struct size (136) on
+// success. Verified live 2026-07-30.
+const PROC_PIDTBSDINFO: libc::c_int = 3;
+
+unsafe extern "C" {
+    fn proc_pidpath(pid: libc::c_int, buf: *mut libc::c_void, len: u32) -> libc::c_int;
+    /// Not in the `libc` crate; resolves a device number to its /dev name.
+    fn devname(dev: libc::dev_t, mode: libc::mode_t) -> *const libc::c_char;
+}
+
+/// Layout of `struct proc_bsdinfo` from <sys/proc_info.h>. Field order matters —
+/// this is read straight out of kernel memory.
+#[repr(C)]
+#[derive(Default, Clone, Copy)]
+struct ProcBsdInfo {
+    pbi_flags: u32,
+    pbi_status: u32,
+    pbi_xstatus: u32,
+    pbi_pid: u32,
+    pbi_ppid: u32,
+    pbi_uid: u32,
+    pbi_gid: u32,
+    pbi_ruid: u32,
+    pbi_rgid: u32,
+    pbi_svuid: u32,
+    pbi_svgid: u32,
+    rfu_1: u32,
+    pbi_comm: [u8; 16],
+    pbi_name: [u8; 32],
+    pbi_nfiles: u32,
+    pbi_pgid: u32,
+    pbi_pjobc: u32,
+    e_tdev: u32,
+    e_tpgid: u32,
+    pbi_nice: i32,
+    pbi_start_tvsec: u64,
+    pbi_start_tvusec: u64,
+}
+
+/// `pid`'s executable path. One cheap syscall — unlike `args`, this does not
+/// allocate an argv-sized buffer, which is why it is the right filter for
+/// walking every pid on the system.
+pub fn exec_path(pid: i32) -> Option<std::path::PathBuf> {
+    let mut buf = [0u8; 4096];
+    let n = unsafe { proc_pidpath(pid, buf.as_mut_ptr().cast(), buf.len() as u32) };
+    if n <= 0 {
+        return None;
+    }
+    let s = std::str::from_utf8(&buf[..n as usize]).ok()?;
+    Some(std::path::PathBuf::from(s))
+}
+
+/// A process's controlling terminal and start time.
+pub struct BsdInfo {
+    /// e.g. `ttys021`. `None` when the process has no controlling terminal.
+    pub tty: Option<String>,
+    /// Unix seconds.
+    pub start_secs: u64,
+}
+
+/// `pid`'s controlling tty and start time, from one `PROC_PIDTBSDINFO` call.
+/// `None` for pids we may not inspect, dead pids, or any FFI failure.
+pub fn bsd_info(pid: i32) -> Option<BsdInfo> {
+    let mut i = ProcBsdInfo::default();
+    let sz = std::mem::size_of::<ProcBsdInfo>() as libc::c_int;
+    let r = unsafe {
+        proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &mut i as *mut _ as *mut libc::c_void, sz)
+    };
+    if r != sz {
+        return None;
+    }
+    let tty = if i.e_tdev == 0 || i.e_tdev == u32::MAX {
+        None
+    } else {
+        let p = unsafe { devname(i.e_tdev as libc::dev_t, libc::S_IFCHR) };
+        if p.is_null() {
+            None
+        } else {
+            let s = unsafe { std::ffi::CStr::from_ptr(p) }.to_string_lossy().into_owned();
+            // devname yields "??" when it cannot resolve the device.
+            if s.is_empty() || s == "??" { None } else { Some(s) }
+        }
+    };
+    Some(BsdInfo { tty, start_secs: i.pbi_start_tvsec })
+}
+
+/// Every visible pid. Grows its buffer until the kernel's answer fits.
+pub fn list_all_pids() -> Vec<i32> {
+    let mut buf = vec![0i32; 2048];
+    loop {
+        let cap = (buf.len() * std::mem::size_of::<i32>()) as libc::c_int;
+        let n = unsafe { proc_listallpids(buf.as_mut_ptr().cast(), cap) };
+        if n < 0 {
+            return Vec::new();
+        }
+        let n = n as usize;
+        if n < buf.len() {
+            buf.truncate(n);
+            return buf;
+        }
+        buf.resize(buf.len() * 2, 0);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -318,20 +421,21 @@ mod tests {
     }
 
     #[test]
-    fn cwd_basename_of_self_matches_current_dir() {
-        let expect = std::env::current_dir()
-            .unwrap()
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .into_owned();
-        let got = super::cwd_basename(std::process::id() as i32).expect("own cwd readable");
-        assert_eq!(got, expect);
+    fn cwd_of_self_is_the_full_current_dir() {
+        let want = std::env::current_dir().expect("cwd readable");
+        let got = super::cwd(std::process::id() as i32).expect("own cwd readable");
+        // Compare canonicalised: /tmp is a symlink to /private/tmp on macOS.
+        assert_eq!(
+            got.canonicalize().unwrap(),
+            want.canonicalize().unwrap(),
+            "expected the full path, not a basename"
+        );
+        assert!(got.is_absolute(), "must be absolute so .git can be tested");
     }
 
     #[test]
-    fn cwd_basename_of_dead_pid_is_none() {
-        assert_eq!(super::cwd_basename(-1), None);
+    fn cwd_of_dead_pid_is_none() {
+        assert_eq!(super::cwd(-1), None);
     }
 
     #[test]
@@ -347,5 +451,42 @@ mod tests {
     #[test]
     fn args_of_dead_pid_is_none() {
         assert!(super::args(-1).is_none());
+    }
+
+    #[test]
+    fn exec_path_of_self_is_the_test_binary() {
+        let p = super::exec_path(std::process::id() as i32).expect("own exec path readable");
+        assert!(p.is_absolute(), "must be absolute: {p:?}");
+        // Cargo's test binary lives under target/; enough to prove it is a real path.
+        assert!(p.exists(), "path must exist on disk: {p:?}");
+    }
+
+    #[test]
+    fn exec_path_of_dead_pid_is_none() {
+        assert_eq!(super::exec_path(-1), None);
+    }
+
+    #[test]
+    fn bsd_info_of_self_has_a_plausible_start_time() {
+        let i = super::bsd_info(std::process::id() as i32).expect("own bsd info readable");
+        // Unix seconds; anything past 2020 proves the field was actually read
+        // rather than left zeroed.
+        assert!(i.start_secs > 1_577_836_800, "start_secs looks unset: {}", i.start_secs);
+        // tty may legitimately be None under a test harness; only the shape matters.
+        if let Some(t) = &i.tty {
+            assert!(t.starts_with("tty") || t.starts_with("cons"), "odd tty name: {t}");
+        }
+    }
+
+    #[test]
+    fn bsd_info_of_dead_pid_is_none() {
+        assert!(super::bsd_info(-1).is_none());
+    }
+
+    #[test]
+    fn list_all_pids_includes_self() {
+        let pids = super::list_all_pids();
+        assert!(pids.len() > 10, "a live macOS box has many pids, got {}", pids.len());
+        assert!(pids.contains(&(std::process::id() as i32)), "own pid missing");
     }
 }

@@ -4,14 +4,19 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
+use crate::sampler::ports::{PortGroup, PortRow};
+use crate::sampler::sessions::ClaudeSession;
 use crate::sampler::{
-    BatterySnap, FastSnap, MemDetail, MediumSnap, PortInfo, PowerSnap, PressureLevel, ProcInfo,
-    SlowSnap, Snapshot,
+    BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
+    Snapshot,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Processes,
-    Ports,
+    Localhost,
+    Sessions,
+    Others,
 }
 
 pub enum SortBy {
@@ -101,6 +106,8 @@ impl App {
                 ProcInfo { pid: 101, name: "kernel_task".into(), cpu: 12.5, mem: 512_000 },
                 ProcInfo { pid: 202, name: "WindowServer".into(), cpu: 8.3, mem: 256_000 },
                 ProcInfo { pid: 303, name: "whirr".into(), cpu: 2.1, mem: 32_000 },
+                ProcInfo { pid: 503, name: "claude".into(), cpu: 12.4, mem: 400_000 },
+                ProcInfo { pid: 601, name: "claude".into(), cpu: 8.1, mem: 300_000 },
             ],
             net_rx_rate: 1_200_000.0,
             net_tx_rate: 300_000.0,
@@ -138,10 +145,33 @@ impl App {
             uptime_secs: 3_600 * 5,
         }));
         app.ingest(Snapshot::Slow(SlowSnap {
-            ports: vec![
-                PortInfo { port: 22, process: "sshd".into(), pid: 1, project: None },
-                PortInfo { port: 8080, process: "whirr-dev".into(), pid: 303, project: Some("my-app".into()) },
-                PortInfo { port: 5432, process: "postgres".into(), pid: 55, project: None },
+            rows: vec![
+                PortRow {
+                    group: PortGroup::Localhost,
+                    label: "glassbook-frontend".into(),
+                    pid: 501,
+                    ports: vec![4206, 6006, 63643],
+                },
+                PortRow { group: PortGroup::Localhost, label: "axterio".into(), pid: 502, ports: vec![3000] },
+                PortRow { group: PortGroup::Claude, label: "axterio".into(), pid: 503, ports: vec![65067] },
+                PortRow {
+                    group: PortGroup::Claude,
+                    label: "ai-design-kit".into(),
+                    pid: 504,
+                    ports: vec![64033],
+                },
+                PortRow {
+                    group: PortGroup::Other,
+                    label: "ControlCenter".into(),
+                    pid: 505,
+                    ports: vec![5000, 7000],
+                },
+            ],
+            sessions: vec![
+                ClaudeSession { pid: 601, project: "axterio".into(), tty: Some("ttys020".into()) },
+                ClaudeSession { pid: 602, project: "axterio".into(), tty: Some("ttys021".into()) },
+                ClaudeSession { pid: 603, project: "whirr".into(), tty: Some("ttys004".into()) },
+                ClaudeSession { pid: 604, project: "eye-claudius".into(), tty: None },
             ],
             stale: false,
         }));
@@ -183,7 +213,9 @@ impl App {
     fn focused_len(&self) -> usize {
         match self.focus {
             Focus::Processes => self.visible_processes().len(),
-            Focus::Ports => self.slow.as_ref().map_or(0, |s| s.ports.len()),
+            Focus::Localhost => self.localhost_rows().len(),
+            Focus::Sessions => self.sessions().len(),
+            Focus::Others => self.other_rows().len(),
         }
     }
 
@@ -195,6 +227,30 @@ impl App {
         self.fast.as_ref().map_or(&[], |f| {
             &f.processes[..f.processes.len().min(MAX_VISIBLE_PROCS)]
         })
+    }
+
+    /// Live CPU for an arbitrary pid — the ports card joins claude rows against
+    /// the fast tick. Unlike `visible_processes`, this searches the full list.
+    pub fn cpu_of(&self, pid: i32) -> Option<f32> {
+        self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
+    }
+
+    /// Port rows belonging to the localhost card.
+    pub fn localhost_rows(&self) -> Vec<&PortRow> {
+        self.rows_in(PortGroup::Localhost)
+    }
+
+    /// Port rows belonging to the others card.
+    pub fn other_rows(&self) -> Vec<&PortRow> {
+        self.rows_in(PortGroup::Other)
+    }
+
+    fn rows_in(&self, g: PortGroup) -> Vec<&PortRow> {
+        self.slow.as_ref().map(|s| s.rows.iter().filter(|r| r.group == g).collect()).unwrap_or_default()
+    }
+
+    pub fn sessions(&self) -> &[ClaudeSession] {
+        self.slow.as_ref().map_or(&[], |s| &s.sessions)
     }
 
     pub fn on_key(&mut self, key: KeyEvent) {
@@ -229,8 +285,10 @@ impl App {
             KeyCode::Char('q') => self.should_quit = true,
             KeyCode::Tab => {
                 self.focus = match self.focus {
-                    Focus::Processes => Focus::Ports,
-                    Focus::Ports => Focus::Processes,
+                    Focus::Processes => Focus::Localhost,
+                    Focus::Localhost => Focus::Sessions,
+                    Focus::Sessions => Focus::Others,
+                    Focus::Others => Focus::Processes,
                 };
                 self.selected = 0;
             }
@@ -246,13 +304,23 @@ impl App {
                 self.sort_by = SortBy::Mem;
                 self.sort_procs();
             }
-            KeyCode::Char('k') => {
-                if matches!(self.focus, Focus::Processes) {
+            KeyCode::Char('k') => match self.focus {
+                Focus::Processes => {
                     if let Some(p) = self.visible_processes().get(self.selected) {
                         self.pending_kill = Some((p.pid, p.name.clone()));
                     }
                 }
-            }
+                // Only dev servers are killable. Sessions and system agents are
+                // deliberately not one keypress from termination.
+                Focus::Localhost => {
+                    if let Some(r) = self.localhost_rows().get(self.selected) {
+                        let n = r.ports.len();
+                        let ports = if n == 1 { "port" } else { "ports" };
+                        self.pending_kill = Some((r.pid, format!("{} ({n} {ports})", r.label)));
+                    }
+                }
+                Focus::Sessions | Focus::Others => {}
+            },
             _ => {}
         }
     }
@@ -534,5 +602,99 @@ mod tests {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
         assert_eq!(a.selected, 9);
+    }
+
+    #[test]
+    fn cpu_of_finds_pids_beyond_the_visible_window() {
+        let mut a = App::new(false);
+        let mut f = demo_fast();
+        // More processes than MAX_VISIBLE_PROCS, with the target last.
+        f.processes = (0..MAX_VISIBLE_PROCS as i32 + 5)
+            .map(|i| ProcInfo { pid: 900 + i, name: format!("p{i}"), cpu: i as f32, mem: 0 })
+            .collect();
+        a.ingest(Snapshot::Fast(f));
+        assert_eq!(a.cpu_of(900 + MAX_VISIBLE_PROCS as i32 + 4), Some(14.0));
+        assert_eq!(a.cpu_of(1), None);
+    }
+
+    fn press(a: &mut App, c: char) {
+        a.on_key(KeyEvent::new(KeyCode::Char(c), KeyModifiers::NONE));
+    }
+
+    #[test]
+    fn kill_works_on_a_localhost_port_row() {
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.selected = 0; // demo()'s first localhost row is glassbook-frontend
+        press(&mut a, 'k');
+        let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
+        assert_eq!(pid, 501);
+        assert!(label.contains("glassbook-frontend"), "dialog should name the process: {label}");
+        assert!(label.contains('3'), "dialog should say how many ports die with it: {label}");
+    }
+
+    #[test]
+    fn kill_is_inert_on_claude_and_other_rows() {
+        for focus in [Focus::Sessions, Focus::Others] {
+            let mut a = App::demo();
+            a.focus = focus;
+            a.selected = 0;
+            press(&mut a, 'k');
+            assert!(
+                a.pending_kill.is_none(),
+                "{focus:?} must not be killable — a stray k must not end a session or a system agent"
+            );
+        }
+    }
+
+    #[test]
+    fn tab_cycles_all_four_panels_and_wraps() {
+        let mut a = App::demo();
+        let seen = |a: &App| format!("{:?}", a.focus);
+        let mut order = vec![seen(&a)];
+        for _ in 0..4 {
+            a.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE));
+            order.push(seen(&a));
+        }
+        assert_eq!(
+            order,
+            vec!["Processes", "Localhost", "Sessions", "Others", "Processes"],
+            "Tab must visit every focusable panel and wrap"
+        );
+    }
+
+    #[test]
+    fn each_card_reports_its_own_row_count() {
+        let a = App::demo();
+        // demo(): 2 localhost rows, 1 other row, 4 sessions.
+        assert_eq!(a.localhost_rows().len(), 2);
+        assert_eq!(a.other_rows().len(), 1);
+        assert_eq!(a.sessions().len(), 4);
+    }
+
+    #[test]
+    fn kill_is_inert_on_sessions_and_others() {
+        for focus in ["Sessions", "Others"] {
+            let mut a = App::demo();
+            a.focus = if focus == "Sessions" { Focus::Sessions } else { Focus::Others };
+            a.selected = 0;
+            a.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+            assert!(
+                a.pending_kill.is_none(),
+                "{focus} must not be killable — ending a session mid-conversation \
+                 or killing a system agent must not be one keypress away"
+            );
+        }
+    }
+
+    #[test]
+    fn kill_still_works_on_a_localhost_row() {
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.selected = 0;
+        a.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+        let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
+        assert_eq!(pid, 501);
+        assert!(label.contains("glassbook-frontend") && label.contains('3'), "got {label}");
     }
 }

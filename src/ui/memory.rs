@@ -75,19 +75,56 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let coarse = format!("{used_gib:.0}G");
         let hero = font::hero_lines(&precise, &coarse, inner.width, pcolor);
 
-        let mut body = vec![Line::from(bar)];
-        body.extend(legend_lines(&labels, &colors, &parts, inner.width));
-        body.push(Line::from(vec![
-            Span::styled("pressure ", Style::default().fg(theme::DIM)),
-            Span::styled(state, Style::default().fg(pcolor).bold()),
-        ]));
-        body.push(Line::styled(swap, Style::default().fg(theme::DIM)));
+        let mut body = legend_lines(&labels, &colors, &parts, inner.width);
+        let avail = inner.height as usize;
+
+        let pressure_span = Span::styled(state, Style::default().fg(pcolor).bold());
+        let separate = [
+            Line::from(vec![Span::styled("pressure ", Style::default().fg(theme::DIM)), pressure_span.clone()]),
+            Line::styled(swap, Style::default().fg(theme::DIM)),
+        ];
+
+        // At the narrowest full-tier card (28 cols) the legend alone needs 3
+        // rows, and hero(5) + pressure(1) + swap(1) already exactly fill the
+        // 10-row inner area, leaving no room for the bar — the card's
+        // signature element. Recover a row by folding pressure and swap onto
+        // one line, in GiB (`64.0G` rather than `64.0 GB`). Even with the
+        // longest pressure word (CRITICAL) and a triple-digit-GiB swap total
+        // that's 28 chars — exactly the narrowest width — but drop the
+        // "swap" label as a fallback so it still can't clip mid-value if
+        // swap ever grows past that.
+        let used_g = format!("{:.1}G", mem.swap_used as f64 / 1_073_741_824.0);
+        let total_g = format!("{:.1}G", mem.swap_total as f64 / 1_073_741_824.0);
+        let full_tail = format!(" · swap {used_g}/{total_g}");
+        let short_tail = format!(" · {used_g}/{total_g}");
+        let tail = if state.len() + full_tail.chars().count() <= inner.width as usize {
+            full_tail
+        } else {
+            short_tail
+        };
+        let merged = [Line::from(vec![pressure_span, Span::styled(tail, Style::default().fg(theme::DIM))])];
+
+        // Prefer the full two-line pressure/swap detail — it's more
+        // informative and is what wider cards (where the legend packs into
+        // fewer rows) already have room for. Only fold onto one line when
+        // that's what it takes to keep the bar on screen.
+        if hero.len() + 1 + body.len() + separate.len() <= avail {
+            body.extend(separate);
+        } else {
+            body.extend(merged);
+        }
 
         let mut lines = hero;
+        // The segmented usage bar is the card's signature element and must
+        // always render at every full-tier width; the merge above exists
+        // precisely so this fits at the narrowest one (120-col terminals).
+        if lines.len() + 1 + body.len() <= avail {
+            lines.push(Line::from(bar));
+        }
         // Spend a spare row as a spacer between the hero number and the
         // detail rows when there's room, so wider cards (where the legend
         // fits in fewer rows) don't just sit half-empty.
-        if lines.len() + body.len() < inner.height as usize {
+        if lines.len() + body.len() < avail {
             lines.push(Line::from(""));
         }
         lines.extend(body);
@@ -149,9 +186,11 @@ fn legend_lines(labels: &[&str], colors: &[Color], parts: &[u64], width: u16) ->
 mod tests {
     use super::segment_widths;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     use crate::app::App;
+    use crate::sampler::{MediumSnap, MemDetail, PressureLevel, Snapshot};
 
     fn draw(w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
@@ -160,16 +199,65 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    /// Build an `App` carrying only a custom `MemDetail`, so tests can drive
+    /// the Memory card with values `App::demo()` doesn't cover (e.g. a large
+    /// swap total) without dragging in the rest of the demo snapshot.
+    fn app_with_mem(mem: MemDetail) -> App {
+        let mut app = App::new(false);
+        app.ingest(Snapshot::Medium(MediumSnap {
+            temp_c: None,
+            power: None,
+            battery: None,
+            memory: Some(mem),
+            uptime_secs: 0,
+        }));
+        app
+    }
+
+    fn draw_mem(w: u16, h: u16, mem: MemDetail) -> String {
+        let app = app_with_mem(mem);
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
+    }
+
+    /// Count of "█" cells in a rendered card — the segmented usage bar's
+    /// signature glyph. Zero means the bar didn't render at all.
+    fn bar_cell_count(rendered: &str) -> usize {
+        rendered.matches('█').count()
+    }
+
     #[test]
     fn hero_shows_used_gib_when_room() {
-        // demo used = 4G + 2G + 1G = 7_000_000_000 B = 6.5 GiB → "6.5G"
+        // demo used = 4G + 2G + 1G = 7_000_000_000 B = 6.5 GiB → "6.5G", in
+        // GREEN (demo pressure is Normal). The hero digits are
+        // background-filled cells now (see `ui/font.rs`'s doc comment), so
+        // verify the "6.5G" bitmap landed by counting pressure-colour-bg
+        // cells rather than grepping rendered text for glyph characters.
+        let full_buf = draw_buffer(40, 12);
+        let filled =
+            full_buf.content().iter().filter(|c| c.style().bg == Some(super::theme::GREEN)).count();
+        let expected: usize =
+            crate::ui::font::big_text("6.5G").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+        assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"6.5G\"");
+
         let full = draw(40, 12);
-        assert!(full.contains("█▄▄ "), "4-row '6' glyph missing"); // '6' row 1
         assert!(full.contains("pressure "), "pressure label missing");
         assert!(full.contains("NORMAL"), "pressure state missing");
         assert!(full.contains("swap 0 B / 953.7 MB"), "swap line missing or clipped");
+
+        let compact_buf = draw_buffer(40, 10);
+        let compact_filled =
+            compact_buf.content().iter().any(|c| c.style().bg == Some(super::theme::GREEN));
+        assert!(!compact_filled, "compact tier must not paint any hero bitmap pixels");
         let compact = draw(40, 10);
-        assert!(!compact.contains("█▄▄ "));
         assert!(compact.contains("pressure "));
     }
 
@@ -177,7 +265,9 @@ mod tests {
     /// `width/4 - 2` wide, so at 120 cols the Memory card's inner width is
     /// exactly 28 — the narrowest the hero layout ever gets. The legend
     /// needs ~62 columns for all four entries on one line; it must wrap
-    /// across the free rows below the hero number instead of clipping.
+    /// across the free rows below the hero number instead of clipping. At
+    /// this width, pressure and swap are also folded onto one merged line
+    /// (see `render`) to free the row the segmented usage bar needs.
     #[test]
     fn nothing_clips_at_the_narrowest_full_tier_card_width() {
         // 120 / 4 gauges = 30 wide, inner 28; gauge-row height 12, inner 10
@@ -188,12 +278,12 @@ mod tests {
             "wired 1.9 GB",
             "compressed 953.7 MB",
             "free 8.4 GB",
-            "pressure ",
             "NORMAL",
-            "swap 0 B / 953.7 MB",
+            "swap 0.0G/0.9G",
         ] {
             assert!(card.contains(needle), "clipped or missing at 28-wide card: {needle:?}");
         }
+        assert!(bar_cell_count(&card) > 0, "usage bar must render at the 120-col card width");
     }
 
     /// Same check at the card widths a 160x45 and 200x50 terminal give the
@@ -214,7 +304,68 @@ mod tests {
             ] {
                 assert!(card.contains(needle), "{w} wide: clipped or missing: {needle:?}");
             }
+            assert!(bar_cell_count(&card) > 0, "{w} wide: usage bar must render");
         }
+    }
+
+    /// Pin the usage bar's presence explicitly at both full-tier reference
+    /// widths named in the fix: the 120-col terminal (card inner 28, merged
+    /// pressure/swap) and the 160-col terminal (card inner 38, unmerged).
+    /// Losing the bar at 120 cols — the most common full-tier size — was the
+    /// regression; it must never silently disappear again.
+    #[test]
+    fn usage_bar_present_at_120_and_160_col_reference_widths() {
+        let card_120 = draw(30, 12); // 120 / 4 gauges = 30 wide, inner 28
+        let card_160 = draw(40, 12); // 160 / 4 gauges = 40 wide, inner 38
+        assert!(bar_cell_count(&card_120) > 0, "bar missing at 120-col card width");
+        assert!(bar_cell_count(&card_160) > 0, "bar missing at 160-col card width");
+    }
+
+    /// Swap can run to tens of GB; verify the merged narrow-width line built
+    /// from `fmt_bytes`-scale figures still fits the 28-col inner width
+    /// without clipping mid-value, and that the bar still has room next to
+    /// it. Also exercises the longest pressure word (CRITICAL).
+    #[test]
+    fn merged_pressure_swap_line_fits_with_a_large_swap_value() {
+        // Same app/wired/compressed/free magnitudes as `App::demo()` (so the
+        // legend still packs into its usual 3 rows at this width) — only
+        // swap and pressure are pushed to their stress values, to isolate
+        // what the merged line itself does under a large swap total.
+        let mem = MemDetail {
+            app: 4_000_000_000,
+            wired: 2_000_000_000,
+            compressed: 1_000_000_000,
+            free: 9_000_000_000,
+            swap_used: 64 * 1_073_741_824,
+            swap_total: 128 * 1_073_741_824,
+            pressure: PressureLevel::Critical,
+        };
+        let card = draw_mem(30, 12, mem);
+        assert!(card.contains("CRITICAL"), "pressure state missing");
+        // The merged tail keeps its "swap" label here (28 chars exactly at
+        // this width) — asserting the full, unbroken figure pair proves
+        // neither value was cut off mid-number.
+        assert!(card.contains("swap 64.0G/128.0G"), "swap figures missing or clipped: {card:?}");
+        assert!(bar_cell_count(&card) > 0, "usage bar must still render alongside a large swap value");
+    }
+
+    /// If a merged line ever can't fit even with the "swap" label dropped
+    /// (implausibly large swap totals), the fallback must still print both
+    /// figures whole rather than truncate one mid-digit.
+    #[test]
+    fn merged_pressure_swap_line_drops_label_rather_than_truncate() {
+        let mem = MemDetail {
+            app: 4_000_000_000,
+            wired: 2_000_000_000,
+            compressed: 1_000_000_000,
+            free: 9_000_000_000,
+            swap_used: 64 * 1_073_741_824,
+            swap_total: 1_200 * 1_073_741_824,
+            pressure: PressureLevel::Critical,
+        };
+        let card = draw_mem(30, 12, mem);
+        assert!(card.contains("64.0G/1200.0G"), "swap figures missing or clipped: {card:?}");
+        assert!(bar_cell_count(&card) > 0, "usage bar must still render");
     }
 
     #[test]

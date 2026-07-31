@@ -26,8 +26,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(Paragraph::new("…").style(Style::default().fg(theme::DIM)), inner);
         return;
     }
+    // The old always-on hint row moved to the global footer (see
+    // `ui::render_footer`); this status line only exists — and only claims a
+    // row — when there's actually a kill confirmation or message to show.
+    let status = if let Some((pid, name)) = &app.pending_kill {
+        Some(Line::styled(
+            format!("kill {name} ({pid})? y/n"),
+            Style::default().fg(theme::RED).bold(),
+        ))
+    } else {
+        app.message.as_ref().map(|msg| Line::styled(msg.clone(), Style::default().fg(theme::AMBER)))
+    };
+
     let mem_total = app.fast.as_ref().map_or(1, |f| f.mem_total).max(1);
-    let visible_rows = inner.height.saturating_sub(1) as usize; // 1 line for footer
+    let visible_rows = inner.height.saturating_sub(status.is_some() as u16) as usize;
     let offset = app.selected.saturating_sub(visible_rows.saturating_sub(1));
 
     let mut lines = Vec::new();
@@ -46,30 +58,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let bar = |fill: usize| {
             format!("{}{}", "▮".repeat(fill), "▯".repeat(BAR_W - fill))
         };
+        // Both bars take their colour from `base.fg(..)` rather than a fresh
+        // `Style::default().fg(..)`: `base` carries the selected row's
+        // background, and a fresh style would drop it, leaving the bar cells
+        // to fall through to the frame's BASE and cut two dark notches out of
+        // the highlight. Same reason `pid` uses `base.fg(theme::DIM)`.
         lines.push(Line::from(vec![
             Span::styled(format!("{:>6} ", p.pid), base.fg(theme::DIM)),
             Span::styled(format!("{:<24.24} ", p.name), base),
             Span::styled(format!("{:>5.1}% ", p.cpu), base),
-            Span::styled(bar(cpu_fill), Style::default().fg(theme::gradient(p.cpu / 100.0))),
+            Span::styled(bar(cpu_fill), base.fg(theme::gradient(p.cpu / 100.0))),
             Span::styled(format!(" {:>9} ", fmt_bytes(p.mem)), base),
-            Span::styled(bar(mem_fill), Style::default().fg(theme::gradient(mem_pct / 100.0))),
+            Span::styled(bar(mem_fill), base.fg(theme::gradient(mem_pct / 100.0))),
         ]));
     }
 
-    let footer = if let Some((pid, name)) = &app.pending_kill {
-        Line::styled(
-            format!("kill {name} ({pid})? y/n"),
-            Style::default().fg(theme::RED).bold(),
-        )
-    } else if let Some(msg) = &app.message {
-        Line::styled(msg.clone(), Style::default().fg(theme::AMBER))
-    } else {
-        Line::styled(
-            "↑↓ select · c/m sort · k kill · tab focus · q quit",
-            Style::default().fg(theme::DIM),
-        )
-    };
-    lines.push(footer);
+    if let Some(status) = status {
+        lines.push(status);
+    }
     f.render_widget(Paragraph::new(lines), inner);
 }
 

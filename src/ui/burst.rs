@@ -39,6 +39,14 @@ const SS: i32 = 3;
 const DOT_ON: f32 = 0.4;
 /// Cells never dim below this, so faint ones survive a light terminal.
 const MIN_BRIGHT: f32 = 0.5;
+/// Dots between this and `DOT_ON` don't light a full dot, but they still
+/// render — dimly — as a halo cell, instead of being discarded like the rest
+/// of the sub-threshold coverage. This is the fringe of partially-covered
+/// dots that supersampling already computes around every ray for free.
+const HALO_ON: f32 = 0.15;
+/// Fixed brightness for halo cells, well below `MIN_BRIGHT` so the fringe
+/// reads as a soft glow around a ray rather than a second, dimmer ray.
+const HALO_BRIGHT: f32 = 0.18;
 
 /// Per-dot `(coverage, ray index)` for one frame. `angle_deg` is the inner
 /// ring's rotation; the outer ring uses its negation.
@@ -108,6 +116,11 @@ pub fn render(w: u16, h: u16, angle_deg: f32) -> Vec<Line<'static>> {
                     // one foreground, and just outside the hub two rays can
                     // share one.
                     let mut votes = [0u32; 2];
+                    // Sub-threshold dots that still clear the halo floor —
+                    // the partially-covered fringe around a ray. Only used
+                    // when the cell has no fully lit dots of its own, so a
+                    // ray's own shape and brightness are never touched.
+                    let (mut halo_bits, mut halo_votes) = (0u8, [0u32; 2]);
                     for (dy, row) in DOTS.iter().enumerate() {
                         for (dx, bit) in row.iter().enumerate() {
                             let (c, k) = g[cy * 4 + dy][cx * 2 + dx];
@@ -116,11 +129,23 @@ pub fn render(w: u16, h: u16, angle_deg: f32) -> Vec<Line<'static>> {
                                 sum += c;
                                 lit += 1;
                                 votes[k % 2] += 1;
+                            } else if c >= HALO_ON {
+                                halo_bits |= bit;
+                                halo_votes[k % 2] += 1;
                             }
                         }
                     }
                     if lit == 0 {
-                        return Span::raw(" ");
+                        if halo_bits == 0 {
+                            return Span::raw(" ");
+                        }
+                        let tone =
+                            if halo_votes[0] >= halo_votes[1] { theme::TEXT } else { theme::ACCENT };
+                        let ch = char::from_u32(0x2800 + u32::from(halo_bits)).unwrap();
+                        return Span::styled(
+                            ch.to_string(),
+                            Style::default().fg(theme::blend(theme::BG_CELL, tone, HALO_BRIGHT)),
+                        );
                     }
                     let tone = if votes[0] >= votes[1] { theme::TEXT } else { theme::ACCENT };
                     let bright = (sum / lit as f32).clamp(MIN_BRIGHT, 1.0);
@@ -392,5 +417,39 @@ pub(crate) mod tests {
                 );
             }
         }
+    }
+
+    /// The fringe just outside a lit dot has sub-`DOT_ON` coverage that
+    /// clears `HALO_ON` — it now renders as a dim halo cell instead of being
+    /// discarded. Cell (1, 7) at angle 0 sits in exactly that fringe, on the
+    /// TEXT-toned side of the top ray (verified against `render`'s raw
+    /// output). Compare it against a fully lit TEXT-toned dot of the same
+    /// ray and a cell far from any ray, which must stay empty.
+    #[test]
+    fn halo_cells_render_dimmer_than_lit_cells_in_the_rays_own_tone() {
+        let lines = render(W, H, 0.0);
+
+        let halo = &lines[1].spans[7];
+        assert_ne!(halo.content.as_ref(), " ", "expected a halo dot at (1, 7)");
+        let halo_fg = halo.style.fg.unwrap();
+        assert!(
+            is_blend_of(halo_fg, theme::TEXT),
+            "halo cell should use the ray's own tone (TEXT), got {halo_fg:?}"
+        );
+
+        let lit_fg = cell_tone(W, H, 0.0, 18.0, F_IN); // fully lit TEXT ray, k=0
+        assert!(is_blend_of(lit_fg, theme::TEXT));
+
+        let brightness = |c: Color| match c {
+            Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),
+            _ => 0,
+        };
+        assert!(
+            brightness(halo_fg) < brightness(lit_fg),
+            "halo cell {halo_fg:?} should be dimmer than a fully lit cell {lit_fg:?}"
+        );
+
+        // Far corner, well outside the burst's radius: still genuinely empty.
+        assert_eq!(lines[0].spans[0].content, " ");
     }
 }

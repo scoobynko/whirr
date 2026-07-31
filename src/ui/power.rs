@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let hero = font::hero_fits(inner);
     let rows = Layout::vertical([
-        Constraint::Length(if hero { 4 } else { 1 }), // hero
+        Constraint::Length(if hero { 5 } else { 1 }), // hero
         Constraint::Length(1),                         // cpu/gpu/ane legend
         Constraint::Min(2),                            // total sparkline
         Constraint::Length(1),                         // battery footer
@@ -55,7 +55,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             // full line — percent, cycles and health — still fits the
             // narrowest full-tier card (inner width 28 at 120 cols); the
             // old wording clipped at widths at or below ~124.
-            let state = if b.charging { "⚡" } else { "🔋" };
+            // Geometric arrows, not emoji: colour emoji clash with the
+            // monochrome palette and render double-width, which shifted every
+            // following field by a cell. ↑/↓ are single-width and match the
+            // network card's directional vocabulary.
+            let state = if b.charging { "↑" } else { "↓" };
             let health = b.health_pct.map_or(String::new(), |h| format!(" · h{h}%"));
             format!("{state} {}% · {}cyc{health}", b.percent, b.cycles)
         }
@@ -85,6 +89,7 @@ fn render_spark(f: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -96,15 +101,34 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
     #[test]
     fn hero_when_room_compact_when_small() {
-        // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W"
+        // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W". The hero
+        // digits are background-filled cells now (see `ui/font.rs`'s doc
+        // comment for why), so verify the "7.9 W" bitmap landed by counting
+        // accent-bg cells, not by grepping rendered text for glyph chars.
         let full = draw(40, 12); // inner 38x10 → hero
-        assert!(full.contains("▀▀▀█"), "4-row '7' glyph missing"); // '7' row 0
+        let full_buf = draw_buffer(40, 12);
+        let filled =
+            full_buf.content().iter().filter(|c| c.style().bg == Some(super::theme::ACCENT)).count();
+        let expected: usize =
+            crate::ui::font::big_text("7.9 W").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+        assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"7.9 W\"");
         assert!(full.contains("cpu 6.4"), "power legend (cpu/gpu/ane) missing");
+
         let compact = draw(40, 10); // inner 38x8 → compact
         assert!(compact.contains("7.9 W"));
-        assert!(!compact.contains("▀▀▀█"));
+        let compact_buf = draw_buffer(40, 10);
+        let compact_filled =
+            compact_buf.content().iter().any(|c| c.style().bg == Some(super::theme::ACCENT));
+        assert!(!compact_filled, "compact tier must not paint any hero bitmap pixels");
     }
 
     #[test]
@@ -113,10 +137,9 @@ mod tests {
         // (120/4=30 wide, inner 28): the old "cycles"/"health" wording
         // clipped at widths at or below ~124.
         let full = draw(30, 12);
-        // "⚡" renders as a double-width glyph (an extra cell reserved after
-        // it), hence the two spaces before "76%".
+        // "↑" is single-width, unlike the emoji this replaced — one space.
         assert!(
-            full.contains("⚡  76% · 120cyc · h97%"),
+            full.contains("↑ 76% · 120cyc · h97%"),
             "battery footer clipped or missing at inner width 28"
         );
     }

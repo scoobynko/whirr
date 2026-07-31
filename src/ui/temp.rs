@@ -17,40 +17,26 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let color = theme::temp_color(t);
 
     if font::hero_fits(inner) {
-        let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).split(inner);
+        let rows = Layout::vertical([Constraint::Length(5), Constraint::Min(3)]).split(inner);
         let precise = format!("{t:.1}°C");
         let coarse = format!("{t:.0}°C");
         let hero = font::hero_lines(&precise, &coarse, inner.width, color);
         f.render_widget(Paragraph::new(hero), rows[0]);
         render_chart(f, rows[1], app, color);
     } else {
-        let cols = Layout::horizontal([Constraint::Length(3), Constraint::Min(4)]).split(inner);
-        render_thermometer(f, cols[0], t, color);
-
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(cols[1]);
+        // A 3-column vertical thermometer (`▐█▌` per row, a `●` bulb at the
+        // bottom) used to sit to the left of the reading here. Dropped: it
+        // restated the number printed right beside it, it read as a stray
+        // progress bar rather than a temperature, and stacked `▐█▌` rows seam
+        // in Terminal.app the same way every other block-glyph column does
+        // (see `ui/spark.rs`). The chart takes the full card width instead.
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(inner);
         f.render_widget(
             Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
             rows[0],
         );
         render_chart(f, rows[1], app, color);
     }
-}
-
-fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
-    let h = area.height as usize;
-    if h < 2 {
-        return;
-    }
-    let fill_ratio = ((t - 30.0) / 75.0).clamp(0.0, 1.0);
-    let filled = ((h - 1) as f32 * fill_ratio).round() as usize;
-    let mut lines = Vec::with_capacity(h);
-    for row in 0..h - 1 {
-        let from_bottom = h - 1 - row;
-        let ch = if from_bottom <= filled { "▐█▌" } else { "▐ ▌" };
-        lines.push(Line::styled(ch, Style::default().fg(color)));
-    }
-    lines.push(Line::styled(" ● ", Style::default().fg(color)));
-    f.render_widget(Paragraph::new(lines), area);
 }
 
 fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
@@ -67,6 +53,8 @@ fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -78,15 +66,53 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16, app: &App) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| super::render(f, f.area(), app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    /// Reconstruct row `y` of the buffer as a `#`/space bitmap string by
+    /// sampling each cell's background colour — the only place a filled hero
+    /// pixel shows up now that hero digits are background fills rather than
+    /// foreground glyph characters (see `ui/font.rs`'s doc comment).
+    fn bg_bitmap_row(buf: &Buffer, y: u16, width: u16, color: Color) -> String {
+        (0..width).map(|x| if buf[(x, y)].style().bg == Some(color) { '#' } else { ' ' }).collect()
+    }
+
     #[test]
-    fn hero_drops_thermometer_when_room() {
-        // demo temp = 88.0 → "88.0°C"
+    fn neither_tier_draws_a_thermometer() {
+        // demo temp = 88.0 → "88.0°C". The hero digits are background-filled
+        // cells now, not foreground quadrant glyphs, so prove the "8" reads
+        // correctly by sampling bg colours off the buffer and matching them
+        // against the same bitmap `hero_lines` was built from, rather than
+        // grepping the rendered text for glyph characters.
+        let app = App::demo();
+        let color = super::theme::temp_color(88.0);
+        let buf = draw_buffer(40, 12, &app);
+        // The card's border occupies row 0, so the hero rows start at y=1,
+        // not y=0 — scan every row and require each expected bitmap row to
+        // appear (as a substring, since it's left-padded by the border/x
+        // offset) somewhere in the buffer, rather than hard-coding its exact
+        // row/column position.
+        let rows: Vec<String> = (0..buf.area.height).map(|y| bg_bitmap_row(&buf, y, 40, color)).collect();
+        let expected = super::font::big_text("88.0°C");
+        for want in &expected {
+            assert!(
+                rows.iter().any(|row| row.contains(want.as_str())),
+                "no buffer row has bitmap {want:?} for \"88.0°C\""
+            );
+        }
+        // The vertical `▐█▌` thermometer is gone from both tiers now, not
+        // just the hero one — it restated the reading printed beside it and
+        // seamed in Terminal.app. The compact tier keeps the numeric readout
+        // and gives the rest of the card to the chart.
         let full = draw(40, 12);
-        assert!(full.contains("▄▀▀▄"), "4-row '8' glyph missing");
         assert!(!full.contains("▐"), "thermometer should be gone in hero tier");
         let compact = draw(40, 10);
-        assert!(compact.contains("▐"), "thermometer missing in compact tier");
-        assert!(compact.contains("88.0°C"));
+        assert!(!compact.contains("▐"), "thermometer should be gone in compact tier too");
+        assert!(!compact.contains("●"), "thermometer bulb should be gone as well");
+        assert!(compact.contains("88.0°C"), "compact tier should still print the reading");
     }
 
     #[test]
@@ -100,27 +126,35 @@ mod tests {
     #[test]
     fn hero_falls_back_to_coarse_when_precise_would_overflow() {
         // 30x12 -> inner 28x10, full hero tier engaged (width >= 28, height >= 9).
-        // "100.5°C" formatted to 1 decimal is 31 glyph-columns wide, wider than
-        // the 28-wide inner area, so it must fall back to "100°C" (0 decimals)
-        // instead of truncating mid-glyph. The precise-width row never fits
-        // inside 28 cols, so its top row is not a substring of the buffer;
-        // the coarse row (23 cols) does fit and must appear intact.
-        let mut t = Terminal::new(TestBackend::new(30, 12)).unwrap();
+        // The quadrant font is narrower than the old full-block face (3-col
+        // digits instead of 4), so a realistic 3-integer-digit reading like
+        // "100.5°C" (26 glyph-cols) now fits the 28-wide card and no longer
+        // exercises the fallback — at this card-width floor, no realistic
+        // sensor temperature (up to ~150°C) overflows any more. The guard
+        // still has to hold for garbage/corrupted sensor input, so drive it
+        // with a value no real Mac would report: "1000.4°C" formatted to 1
+        // decimal is 30 glyph-columns wide, wider than the 28-wide inner
+        // area, so it must fall back to "1000°C" (0 decimals) instead of
+        // truncating mid-glyph. The precise-width row never fits inside 28
+        // cols, so its top row is not a substring of the buffer; the coarse
+        // row (23 cols) does fit and must appear intact.
         let mut app = App::demo();
-        app.medium.as_mut().unwrap().temp_c = Some(100.5);
-        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
-        let content: String =
-            t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(!content.contains('?'), "hero glyph fallback '?' should never render");
-        let precise_row0 = super::font::big_text("100.5°C").remove(0);
-        let coarse_row0 = super::font::big_text("100°C").remove(0);
+        app.medium.as_mut().unwrap().temp_c = Some(1000.4);
+        let color = super::theme::temp_color(1000.4);
+        let buf = draw_buffer(30, 12, &app);
+        // Sample the same 4 hero rows as bg-colour bitmaps rather than
+        // grepping rendered text: filled hero pixels carry `color` as their
+        // background now, and every cell's symbol is a plain space.
+        let rows: Vec<String> = (0..4).map(|y| bg_bitmap_row(&buf, y, 30, color)).collect();
+        let precise_row0 = super::font::big_text("1000.4°C").remove(0);
+        let coarse_row0 = super::font::big_text("1000°C").remove(0);
         assert!(
-            !content.contains(precise_row0.as_str()),
+            !rows.iter().any(|r| r.contains(precise_row0.as_str())),
             "full-precision hero row rendered intact — should have overflowed the 28-wide card"
         );
         assert!(
-            content.contains(coarse_row0.as_str()),
-            "coarse fallback row missing — hero should fall back to \"100°C\" when precise overflows"
+            rows.iter().any(|r| r.contains(coarse_row0.as_str())),
+            "coarse fallback row missing — hero should fall back to \"1000°C\" when precise overflows"
         );
     }
 

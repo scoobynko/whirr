@@ -1,5 +1,7 @@
 mod fast;
 mod medium;
+pub mod ports;
+pub mod sessions;
 mod slow;
 
 use std::sync::mpsc::Sender;
@@ -73,12 +75,11 @@ pub struct PortInfo {
     pub port: u16,
     pub process: String,
     pub pid: i32,
-    /// Basename of the owning process's cwd — "which project is this?".
-    pub project: Option<String>,
 }
 
 pub struct SlowSnap {
-    pub ports: Vec<PortInfo>,
+    pub rows: Vec<crate::sampler::ports::PortRow>,
+    pub sessions: Vec<crate::sampler::sessions::ClaudeSession>,
     pub stale: bool,
 }
 

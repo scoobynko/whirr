@@ -9,7 +9,8 @@ pub const RED: Color = Color::Rgb(255, 92, 87);
 pub const GREEN: Color = Color::Rgb(74, 214, 109);
 pub const TEXT: Color = Color::Rgb(205, 214, 217);
 pub const DIM: Color = Color::Rgb(90, 105, 110);         // borders, labels
-pub const BG_CELL: Color = Color::Rgb(18, 32, 36);       // empty heatmap cell
+pub const BG_CELL: Color = Color::Rgb(18, 32, 36);       // empty heatmap cell (used as a *foreground* for text-on-accent, e.g. selected rows — do not repurpose)
+pub const BASE: Color = Color::Rgb(10, 14, 18);          // near-black frame background, slight cool cast
 
 const GRAD_FROM: (u8, u8, u8) = (14, 58, 58); // dark teal
 const GRAD_TO: (u8, u8, u8) = (45, 225, 194);
@@ -37,6 +38,25 @@ pub fn blend(from: Color, to: Color, t: f32) -> Color {
     let (tr, tg, tb) = ch(to);
     let lerp = |a: u8, b: u8| (a as f32 + (b as f32 - a as f32) * t) as u8;
     Color::Rgb(lerp(fr, tr), lerp(fg, tg), lerp(fb, tb))
+}
+
+/// Below this ramp factor a non-zero value is floored up to it, so the
+/// dimmest visible bar still reads as distinct from `BASE` instead of
+/// blending almost exactly into it. Matches `burst::MIN_BRIGHT` — the same
+/// problem (a colour blended toward the background disappearing at low
+/// coverage) gets the same fix.
+const MIN_RAMP: f32 = 0.5;
+
+/// Darken `color` toward `BASE` by factor `t` (0.0 = `BASE`, 1.0 = the full
+/// `color`). Used by sparkline bars so a short bar is a dim version of the
+/// chart's own colour and a tall bar is the full colour, instead of every
+/// bar being one flat shade. Any `t` above zero is floored to `MIN_RAMP` so a
+/// bar that exists at all stays visible; `t == 0.0` (no bar) still renders as
+/// exactly `BASE`.
+pub fn ramp(color: Color, t: f32) -> Color {
+    let t = t.clamp(0.0, 1.0);
+    let floored = if t > 0.0 { t.max(MIN_RAMP) } else { 0.0 };
+    blend(BASE, color, floored)
 }
 
 pub fn temp_color(c: f32) -> Color {
@@ -98,5 +118,45 @@ mod tests {
         let b = Color::Rgb(200, 210, 220);
         assert_eq!(blend(a, b, -1.0), a);
         assert_eq!(blend(a, b, 5.0), b);
+    }
+
+    #[test]
+    fn ramp_hits_base_at_zero_and_the_full_colour_at_one() {
+        assert_eq!(ramp(ACCENT, 0.0), BASE);
+        assert_eq!(ramp(ACCENT, 1.0), ACCENT);
+    }
+
+    #[test]
+    fn ramp_is_dimmer_at_low_factors_than_high_ones() {
+        let ch = |c: Color| match c { Color::Rgb(r, g, b) => (r, g, b), _ => panic!() };
+        let (r_dim, g_dim, b_dim) = ch(ramp(ACCENT, 0.2));
+        let (r_bright, g_bright, b_bright) = ch(ramp(ACCENT, 1.0));
+        assert!(r_dim <= r_bright && g_dim < g_bright && b_dim < b_bright);
+    }
+
+    #[test]
+    fn ramp_floors_the_lowest_nonzero_bar_away_from_base() {
+        // A bar at a sliver of its max (well below MIN_RAMP) must still
+        // render meaningfully distinct from BASE, not fade into it — the
+        // same defect burst.rs already fixed for its fringe dots.
+        let ch = |c: Color| match c { Color::Rgb(r, g, b) => (i32::from(r), i32::from(g), i32::from(b)), _ => panic!() };
+        let dimmest = ramp(ACCENT, 0.01);
+        assert_ne!(dimmest, BASE);
+        let (r0, g0, b0) = ch(BASE);
+        let (r1, g1, b1) = ch(dimmest);
+        let dist = (r1 - r0).abs() + (g1 - g0).abs() + (b1 - b0).abs();
+        assert!(dist > 20, "lowest non-zero bar colour {dimmest:?} too close to BASE {BASE:?}");
+        // A genuinely absent bar (t == 0.0) must still render as exactly BASE.
+        assert_eq!(ramp(ACCENT, 0.0), BASE);
+    }
+
+    #[test]
+    fn ramp_stays_within_a_colours_own_hue_not_teal() {
+        // A second hue (amber-ish) ramped toward BASE should never pass
+        // through ACCENT's own channel proportions — proves the ramp derives
+        // from the caller's colour, not a hardcoded teal gradient.
+        let dim_red = ramp(RED, 0.5);
+        let dim_accent = ramp(ACCENT, 0.5);
+        assert_ne!(dim_red, dim_accent);
     }
 }
