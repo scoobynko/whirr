@@ -17,7 +17,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let color = theme::temp_color(t);
 
     if font::hero_fits(inner) {
-        let rows = Layout::vertical([Constraint::Length(4), Constraint::Min(3)]).split(inner);
+        let rows = Layout::vertical([Constraint::Length(5), Constraint::Min(3)]).split(inner);
         let precise = format!("{t:.1}°C");
         let coarse = format!("{t:.0}°C");
         let hero = font::hero_lines(&precise, &coarse, inner.width, color);

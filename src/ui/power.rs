@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let hero = font::hero_fits(inner);
     let rows = Layout::vertical([
-        Constraint::Length(if hero { 4 } else { 1 }), // hero
+        Constraint::Length(if hero { 5 } else { 1 }), // hero
         Constraint::Length(1),                         // cpu/gpu/ane legend
         Constraint::Min(2),                            // total sparkline
         Constraint::Length(1),                         // battery footer

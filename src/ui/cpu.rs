@@ -16,7 +16,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     if font::hero_fits(inner) {
         let rows = Layout::vertical([
-            Constraint::Length(4), // hero
+            Constraint::Length(5), // hero
             Constraint::Length(1), // per-core strip
             Constraint::Min(3),    // history chart
         ])

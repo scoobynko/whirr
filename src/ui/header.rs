@@ -18,7 +18,7 @@ const LOGO: [&str; 3] = [
 // bitmap as the hero font (`ui/font.rs::glyph`) rather than drawn with
 // foreground block characters — see that module's doc comment for why
 // (Terminal.app seams foreground block glyphs but never a cell background).
-// The compact tier keeps its own 3-row wordmark above: this face is 4 rows
+// The compact tier keeps its own 3-row wordmark above: this face is 5 rows
 // and the compact header band is only 3.
 fn logo4_lines() -> Vec<Line<'static>> {
     font::bitmap_lines(&font::big_text("WHIRR"), theme::ACCENT)
@@ -55,7 +55,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     ])
     .split(area);
 
-    let logo_area = Rect { y: area.y + 2, height: area.height.saturating_sub(2).min(4), ..cols[0] };
+    let logo_area = Rect { y: area.y + 2, height: area.height.saturating_sub(2).min(5), ..cols[0] };
     f.render_widget(Paragraph::new(logo4_lines()), logo_area);
 
     if !app.no_fan {
@@ -140,11 +140,16 @@ mod tests {
     }
 
     #[test]
-    fn logo4_is_four_uniform_rows_within_budget() {
+    fn logo4_is_five_uniform_rows_within_budget() {
         let rows = crate::ui::font::big_text("WHIRR");
-        assert_eq!(rows.len(), 4);
+        assert_eq!(rows.len(), 5);
         let w = rows[0].chars().count();
         assert!(rows.iter().all(|r| r.chars().count() == w));
+        // See `ui/font.rs`'s `hero_width_budgets_stay_under_28` for why the
+        // real rendered width (22) is one wider than the naive "one blank
+        // column between glyphs" arithmetic (21) would suggest: `big_text`
+        // also trails a blank column after the final glyph.
+        assert_eq!(w, 22);
         assert!(w <= 26);
     }
 
@@ -162,7 +167,7 @@ mod tests {
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let buf = t.backend().buffer().clone();
 
-        let logo_symbols: String = (0..26).flat_map(|x| (2..6).map(move |y| (x, y))).map(|(x, y)| buf[(x, y)].symbol().to_string()).collect();
+        let logo_symbols: String = (0..26).flat_map(|x| (2..7).map(move |y| (x, y))).map(|(x, y)| buf[(x, y)].symbol().to_string()).collect();
         assert!(
             logo_symbols.chars().all(|c| c == ' '),
             "logo area must render as spaces with a background colour, found {logo_symbols:?}"

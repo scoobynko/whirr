@@ -75,7 +75,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let coarse = format!("{used_gib:.0}G");
         let hero = font::hero_lines(&precise, &coarse, inner.width, pcolor);
 
-        let mut body = vec![Line::from(bar)];
+        let mut body = Vec::new();
         body.extend(legend_lines(&labels, &colors, &parts, inner.width));
         body.push(Line::from(vec![
             Span::styled("pressure ", Style::default().fg(theme::DIM)),
@@ -84,10 +84,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         body.push(Line::styled(swap, Style::default().fg(theme::DIM)));
 
         let mut lines = hero;
+        let avail = inner.height as usize;
+        // The segmented usage bar duplicates what the legend's numbers
+        // already say, so it's the first thing to drop under tight vertical
+        // budget: at the narrowest full-tier card (28 cols), the legend
+        // alone needs 3 of its rows and the 5-row hero plus pressure/swap
+        // already exactly fill the 10-row inner area, leaving no room for
+        // it. Wider cards, where the legend packs into fewer rows, keep it.
+        if lines.len() + 1 + body.len() <= avail {
+            lines.push(Line::from(bar));
+        }
         // Spend a spare row as a spacer between the hero number and the
         // detail rows when there's room, so wider cards (where the legend
         // fits in fewer rows) don't just sit half-empty.
-        if lines.len() + body.len() < inner.height as usize {
+        if lines.len() + body.len() < avail {
             lines.push(Line::from(""));
         }
         lines.extend(body);
