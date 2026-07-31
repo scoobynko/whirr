@@ -80,9 +80,11 @@ fn render_band(f: &mut Frame, area: Rect, marker: &str, data: &[u64], max: u64, 
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
+    use ratatui::layout::Rect;
     use ratatui::Terminal;
 
     use crate::app::App;
+    use super::theme;
 
     fn draw() -> Vec<String> {
         draw_at_inner_height(6)
@@ -160,6 +162,30 @@ mod tests {
         let up_rows = lines.iter().filter(|l| l.contains('▲')).count();
         assert_eq!(down_rows, 2, "expected rate line + single download band row, got {down_rows}");
         assert_eq!(up_rows, 1, "upload band should not render when only one row remains, got {up_rows} rows with '▲'");
+    }
+
+    /// The two bands are drawn in different caller colours (`ACCENT` and
+    /// `gradient(0.55)`); each band's ramp must stay within its own hue
+    /// rather than both collapsing onto the same hardcoded teal.
+    #[test]
+    fn both_network_bands_ramp_within_their_own_hue() {
+        let mut t = Terminal::new(TestBackend::new(10, 2)).unwrap();
+        t.draw(|f| {
+            let area = f.area();
+            let down = Rect { height: 1, ..area };
+            let up = Rect { y: area.y + 1, height: 1, ..area };
+            super::render_band(f, down, "▼", &[8], 8, theme::ACCENT);
+            super::render_band(f, up, "▲", &[8], 8, theme::gradient(0.55));
+        })
+        .unwrap();
+        let buf = t.backend().buffer().clone();
+        // A single sample right-anchors to the last column (spark::render's
+        // tail-slicing places the newest/only sample at the right edge).
+        let down_bar = buf[(9, 0)].fg;
+        let up_bar = buf[(9, 1)].fg;
+        assert_eq!(down_bar, theme::ACCENT, "download band's full-height bar should be its own accent colour");
+        assert_eq!(up_bar, theme::gradient(0.55), "upload band's full-height bar should be its own gradient colour, not accent");
+        assert_ne!(down_bar, up_bar, "the two bands must not collapse to the same colour");
     }
 
     #[test]

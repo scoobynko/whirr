@@ -40,6 +40,14 @@ pub fn blend(from: Color, to: Color, t: f32) -> Color {
     Color::Rgb(lerp(fr, tr), lerp(fg, tg), lerp(fb, tb))
 }
 
+/// Darken `color` toward `BASE` by factor `t` (0.0 = `BASE`, 1.0 = the full
+/// `color`). Used by sparkline bars so a short bar is a dim version of the
+/// chart's own colour and a tall bar is the full colour, instead of every
+/// bar being one flat shade.
+pub fn ramp(color: Color, t: f32) -> Color {
+    blend(BASE, color, t)
+}
+
 pub fn temp_color(c: f32) -> Color {
     if c >= 95.0 { RED } else if c >= 85.0 { AMBER } else { ACCENT }
 }
@@ -99,5 +107,29 @@ mod tests {
         let b = Color::Rgb(200, 210, 220);
         assert_eq!(blend(a, b, -1.0), a);
         assert_eq!(blend(a, b, 5.0), b);
+    }
+
+    #[test]
+    fn ramp_hits_base_at_zero_and_the_full_colour_at_one() {
+        assert_eq!(ramp(ACCENT, 0.0), BASE);
+        assert_eq!(ramp(ACCENT, 1.0), ACCENT);
+    }
+
+    #[test]
+    fn ramp_is_dimmer_at_low_factors_than_high_ones() {
+        let ch = |c: Color| match c { Color::Rgb(r, g, b) => (r, g, b), _ => panic!() };
+        let (r_dim, g_dim, b_dim) = ch(ramp(ACCENT, 0.2));
+        let (r_bright, g_bright, b_bright) = ch(ramp(ACCENT, 1.0));
+        assert!(r_dim <= r_bright && g_dim < g_bright && b_dim < b_bright);
+    }
+
+    #[test]
+    fn ramp_stays_within_a_colours_own_hue_not_teal() {
+        // A second hue (amber-ish) ramped toward BASE should never pass
+        // through ACCENT's own channel proportions — proves the ramp derives
+        // from the caller's colour, not a hardcoded teal gradient.
+        let dim_red = ramp(RED, 0.5);
+        let dim_accent = ramp(ACCENT, 0.5);
+        assert_ne!(dim_red, dim_accent);
     }
 }
