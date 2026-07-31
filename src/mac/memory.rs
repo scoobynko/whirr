@@ -77,7 +77,6 @@ fn swap() -> (u64, u64) {
     }
 }
 
-#[allow(dead_code)]
 pub fn read() -> Option<MemDetail> {
     let stats = vm_stats()?;
     let page = sysctl_u64("hw.pagesize")?;

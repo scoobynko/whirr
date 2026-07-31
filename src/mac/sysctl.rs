@@ -39,8 +39,6 @@ pub fn sysctl_u64(name: &str) -> Option<u64> {
 pub struct SystemStatic {
     pub chip: String,
     pub os_version: String,
-    pub p_cores: usize,
-    pub e_cores: usize,
 }
 
 impl SystemStatic {
@@ -48,8 +46,6 @@ impl SystemStatic {
         Self {
             chip: sysctl_string("machdep.cpu.brand_string").unwrap_or_else(|| "Mac".into()),
             os_version: sysctl_string("kern.osproductversion").unwrap_or_default(),
-            p_cores: sysctl_u32("hw.perflevel0.physicalcpu").unwrap_or(0) as usize,
-            e_cores: sysctl_u32("hw.perflevel1.physicalcpu").unwrap_or(0) as usize,
         }
     }
 }
@@ -60,12 +56,13 @@ mod tests {
 
     #[test]
     fn reads_real_values() {
-        // chip and os_version come from plain sysctls a VM answers too, so
-        // they are checked unconditionally; the physical P/E core split is not.
+        // No `needs_real_hardware!` guard here any more: the only field that
+        // needed one was the physical P/E core split, and `p_cores`/`e_cores`
+        // are gone — nothing read them. Both remaining fields come from plain
+        // sysctls that a virtualised host answers too, so this stays strict
+        // everywhere, CI included.
         let s = SystemStatic::read();
         assert!(s.chip.contains("Apple"));
         assert!(!s.os_version.is_empty());
-        crate::mac::needs_real_hardware!();
-        assert!(s.p_cores > 0 && s.e_cores > 0);
     }
 }

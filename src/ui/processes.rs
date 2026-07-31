@@ -40,11 +40,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
     let mem_total = app.fast.as_ref().map_or(1, |f| f.mem_total).max(1);
     let visible_rows = inner.height.saturating_sub(status.is_some() as u16) as usize;
-    let offset = app.selected.saturating_sub(visible_rows.saturating_sub(1));
+    let cursor = focused.then(|| app.selected());
+    let offset = super::scroll::offset(visible_rows, cursor);
 
     let mut lines = Vec::new();
     for (i, p) in procs.iter().enumerate().skip(offset).take(visible_rows) {
-        let selected = focused && i == app.selected;
+        let selected = cursor == Some(i);
         let base = if selected {
             Style::default().fg(theme::TEXT).bg(theme::BG_CELL).bold()
         } else if i == 0 {

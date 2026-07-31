@@ -483,6 +483,46 @@ fn selected_process_row_highlight_is_contiguous_across_its_bars() {
     );
 }
 
+/// Moving the cursor in one card must not scroll a different, unfocused card.
+/// `App` used to keep a single shared cursor and `processes::render` computed
+/// its offset from it without checking focus, so scrolling the sessions card at
+/// 120x30 — where the process table is squeezed to one content row — pushed the
+/// top process off screen.
+#[test]
+fn scrolling_one_card_does_not_scroll_an_unfocused_one() {
+    let mut app = demo_with_focus(Focus::Sessions);
+    assert!(draw_app_at(&app, 120, 30).contains("kernel_task"), "top process visible to begin with");
+    for _ in 0..3 {
+        app.on_key(ratatui::crossterm::event::KeyEvent::from(
+            ratatui::crossterm::event::KeyCode::Down,
+        ));
+    }
+    assert_eq!(app.selected(), 3, "the sessions cursor should have moved");
+    assert!(
+        draw_app_at(&app, 120, 30).contains("kernel_task"),
+        "the unfocused process table scrolled because another card's cursor moved"
+    );
+}
+
+/// A tick where lsof found no listening sockets must not blank the sessions
+/// card: sessions come from a pid walk that never consults lsof. They used to
+/// share one match arm in `sampler::slow`, so an empty (or failed) port scan
+/// took the sessions down with it.
+#[test]
+fn an_empty_port_scan_leaves_the_sessions_card_intact() {
+    use whirr::sampler::{SlowSnap, Snapshot};
+    let mut app = App::demo();
+    let sessions = app.sessions().to_vec();
+    assert!(!sessions.is_empty(), "demo has sessions to lose");
+    // What `slow::run` now sends when lsof matches nothing: no rows, but the
+    // independently-scanned sessions still present.
+    app.ingest(Snapshot::Slow(SlowSnap { rows: Vec::new(), sessions, stale: false }));
+
+    let out = draw_app_at(&app, 160, 45);
+    assert!(out.contains("ttys020"), "claude sessions vanished with the ports");
+    assert!(out.contains("no listening ports"), "the ports cards should be the empty ones");
+}
+
 /// Narrow-but-tall terminals get the full visual design via a 2x2 gauge grid
 /// rather than dropping to the compact tier. 103x45 fails the `full` gate on
 /// width (needs 120 for four hero cards abreast) but has ample height, so the

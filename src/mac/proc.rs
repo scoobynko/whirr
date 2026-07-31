@@ -73,7 +73,6 @@ pub struct ProcScanner {
     last_scan: Option<Instant>,
     /// mach_absolute_time units → nanoseconds.
     ns_per_unit: f64,
-    pids: Vec<i32>,
 }
 
 impl Default for ProcScanner {
@@ -91,23 +90,7 @@ impl ProcScanner {
         } else {
             f64::from(tb.numer) / f64::from(tb.denom)
         };
-        Self { prev: HashMap::new(), last_scan: None, ns_per_unit, pids: vec![0; 2048] }
-    }
-
-    fn list_pids(&mut self) -> usize {
-        loop {
-            let cap_bytes = (self.pids.len() * std::mem::size_of::<i32>()) as libc::c_int;
-            let n = unsafe { proc_listallpids(self.pids.as_mut_ptr().cast(), cap_bytes) };
-            if n < 0 {
-                return 0;
-            }
-            let n = n as usize;
-            if n < self.pids.len() {
-                return n;
-            }
-            // Buffer may have been exactly filled; grow and retry.
-            self.pids.resize(self.pids.len() * 2, 0);
-        }
+        Self { prev: HashMap::new(), last_scan: None, ns_per_unit }
     }
 
     /// One pass over all visible pids. CPU% is the delta in cumulative
@@ -123,13 +106,12 @@ impl ProcScanner {
             .max(1.0);
         self.last_scan = Some(now);
 
-        let n = self.list_pids();
-        let mut out = Vec::with_capacity(n);
-        let mut next = HashMap::with_capacity(n);
+        let pids = list_all_pids();
+        let mut out = Vec::with_capacity(pids.len());
+        let mut next = HashMap::with_capacity(pids.len());
         let sz = std::mem::size_of::<ProcTaskInfo>() as libc::c_int;
 
-        for i in 0..n {
-            let pid = self.pids[i];
+        for pid in pids {
             if pid <= 0 {
                 continue;
             }
@@ -216,69 +198,6 @@ fn read_name(pid: i32) -> String {
     String::from_utf8_lossy(&buf[..r as usize]).into_owned()
 }
 
-/// A process's true executable path and argument vector.
-pub struct ProcArgs {
-    pub exec_path: String,
-    pub argv: Vec<String>,
-}
-
-/// Read `pid`'s exec path + argv via the `KERN_PROCARGS2` sysctl. Buffer
-/// layout: `[argc: i32][exec_path\0][NUL padding][argv0\0 argv1\0 …][env…]`.
-/// `None` for pids we may not inspect (other users), dead pids, or any
-/// parse/FFI failure. Never panics.
-pub fn args(pid: i32) -> Option<ProcArgs> {
-    let argmax = crate::mac::sysctl::sysctl_u64("kern.argmax")? as usize;
-    let mut buf = vec![0u8; argmax.clamp(4096, 1024 * 1024)];
-    let mut size = buf.len();
-    let mut mib = [libc::CTL_KERN, libc::KERN_PROCARGS2, pid];
-    let rc = unsafe {
-        libc::sysctl(
-            mib.as_mut_ptr(),
-            mib.len() as u32,
-            buf.as_mut_ptr().cast(),
-            &mut size,
-            std::ptr::null_mut(),
-            0,
-        )
-    };
-    if rc != 0 || size < 4 {
-        return None;
-    }
-    buf.truncate(size);
-
-    let argc = i32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]).max(0) as usize;
-    let mut i = 4;
-    let take_cstr = |i: &mut usize| -> Option<String> {
-        let start = *i;
-        while *i < buf.len() && buf[*i] != 0 {
-            *i += 1;
-        }
-        if start >= buf.len() {
-            return None;
-        }
-        let s = String::from_utf8_lossy(&buf[start..*i]).into_owned();
-        *i += 1; // step past the NUL
-        Some(s)
-    };
-
-    let exec_path = take_cstr(&mut i)?;
-    // Skip the NUL padding between exec_path and argv[0].
-    while i < buf.len() && buf[i] == 0 {
-        i += 1;
-    }
-    let mut argv = Vec::with_capacity(argc);
-    for _ in 0..argc {
-        match take_cstr(&mut i) {
-            Some(s) => argv.push(s),
-            None => break,
-        }
-    }
-    if exec_path.is_empty() {
-        return None;
-    }
-    Some(ProcArgs { exec_path, argv })
-}
-
 // PROC_PIDTBSDINFO flavor; `proc_pidinfo` returns the struct size (136) on
 // success. Verified live 2026-07-30.
 const PROC_PIDTBSDINFO: libc::c_int = 3;
@@ -331,17 +250,11 @@ pub fn exec_path(pid: i32) -> Option<std::path::PathBuf> {
     Some(std::path::PathBuf::from(s))
 }
 
-/// A process's controlling terminal and start time.
-pub struct BsdInfo {
-    /// e.g. `ttys021`. `None` when the process has no controlling terminal.
-    pub tty: Option<String>,
-    /// Unix seconds.
-    pub start_secs: u64,
-}
-
-/// `pid`'s controlling tty and start time, from one `PROC_PIDTBSDINFO` call.
-/// `None` for pids we may not inspect, dead pids, or any FFI failure.
-pub fn bsd_info(pid: i32) -> Option<BsdInfo> {
+/// `pid`'s controlling terminal, e.g. `ttys021`, from one `PROC_PIDTBSDINFO`
+/// call. The outer `None` means the pid could not be inspected at all (another
+/// user's process, a dead pid, an FFI failure); the inner `None` means it has
+/// no controlling terminal.
+pub fn tty(pid: i32) -> Option<Option<String>> {
     let mut i = ProcBsdInfo::default();
     let sz = std::mem::size_of::<ProcBsdInfo>() as libc::c_int;
     let r = unsafe {
@@ -362,7 +275,7 @@ pub fn bsd_info(pid: i32) -> Option<BsdInfo> {
             if s.is_empty() || s == "??" { None } else { Some(s) }
         }
     };
-    Some(BsdInfo { tty, start_secs: i.pbi_start_tvsec })
+    Some(tty)
 }
 
 /// Every visible pid. Grows its buffer until the kernel's answer fits.
@@ -439,21 +352,6 @@ mod tests {
     }
 
     #[test]
-    fn args_of_self_are_plausible() {
-        let pa = super::args(std::process::id() as i32).expect("own args readable");
-        assert!(pa.exec_path.starts_with('/'), "exec_path: {}", pa.exec_path);
-        assert!(!pa.argv.is_empty());
-        // The test binary's argv[0] ends with the harness binary name.
-        assert!(pa.argv[0].contains("proc") || pa.argv[0].contains("whirr"),
-            "argv[0]: {}", pa.argv[0]);
-    }
-
-    #[test]
-    fn args_of_dead_pid_is_none() {
-        assert!(super::args(-1).is_none());
-    }
-
-    #[test]
     fn exec_path_of_self_is_the_test_binary() {
         let p = super::exec_path(std::process::id() as i32).expect("own exec path readable");
         assert!(p.is_absolute(), "must be absolute: {p:?}");
@@ -467,20 +365,19 @@ mod tests {
     }
 
     #[test]
-    fn bsd_info_of_self_has_a_plausible_start_time() {
-        let i = super::bsd_info(std::process::id() as i32).expect("own bsd info readable");
-        // Unix seconds; anything past 2020 proves the field was actually read
-        // rather than left zeroed.
-        assert!(i.start_secs > 1_577_836_800, "start_secs looks unset: {}", i.start_secs);
-        // tty may legitimately be None under a test harness; only the shape matters.
-        if let Some(t) = &i.tty {
-            assert!(t.starts_with("tty") || t.starts_with("cons"), "odd tty name: {t}");
+    fn tty_of_self_is_readable_and_well_shaped() {
+        // The outer Some proves the pid was inspected at all. The inner value
+        // may legitimately be None under a test harness with no controlling
+        // terminal, so only its shape is pinned.
+        let t = super::tty(std::process::id() as i32).expect("own pid must be inspectable");
+        if let Some(name) = &t {
+            assert!(name.starts_with("tty") || name.starts_with("cons"), "odd tty name: {name}");
         }
     }
 
     #[test]
-    fn bsd_info_of_dead_pid_is_none() {
-        assert!(super::bsd_info(-1).is_none());
+    fn tty_of_dead_pid_is_none() {
+        assert!(super::tty(-1).is_none(), "an uninspectable pid must be the outer None");
     }
 
     #[test]

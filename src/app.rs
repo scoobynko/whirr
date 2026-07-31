@@ -19,6 +19,21 @@ pub enum Focus {
     Others,
 }
 
+impl Focus {
+    /// Tab order. Doubles as the index space for `App::selected`, so a panel
+    /// added here automatically gets its own cursor.
+    pub const ALL: [Focus; 4] =
+        [Focus::Processes, Focus::Localhost, Focus::Sessions, Focus::Others];
+
+    fn index(self) -> usize {
+        Self::ALL.iter().position(|&f| f == self).expect("ALL covers every Focus")
+    }
+
+    fn next(self) -> Focus {
+        Self::ALL[(self.index() + 1) % Self::ALL.len()]
+    }
+}
+
 pub enum SortBy {
     Cpu,
     Mem,
@@ -38,7 +53,12 @@ pub struct App {
     pub net_hist: History<(f64, f64)>,
     pub focus: Focus,
     pub sort_by: SortBy,
-    pub selected: usize,
+    /// One cursor per panel, indexed by `Focus::index`. A single shared cursor
+    /// let scrolling one card move another card's view — the panels have
+    /// independent lengths and independent scroll positions. Read through
+    /// `selected()`, which clamps against the focused panel's current length,
+    /// so a panel that shrinks under its own cursor needs no separate fixup.
+    selected: [usize; Focus::ALL.len()],
     pub pending_kill: Option<(i32, String)>,
     pub message: Option<String>,
     pub no_fan: bool,
@@ -63,7 +83,7 @@ impl App {
             net_hist: History::new(60),
             focus: Focus::Processes,
             sort_by: SortBy::Cpu,
-            selected: 0,
+            selected: [0; Focus::ALL.len()],
             pending_kill: None,
             message: None,
             no_fan,
@@ -74,7 +94,7 @@ impl App {
     }
 
     /// A pre-populated `App` for render tests and manual UI inspection: one
-    /// `FastSnap` (a few processes, per-core loads), one `MediumSnap` (all
+    /// `FastSnap` (a few processes), one `MediumSnap` (all
     /// `Some`, temp at 88.0 to exercise the amber threshold), and one
     /// `SlowSnap` (a few ports, not stale).
     ///
@@ -100,7 +120,6 @@ impl App {
             app.net_hist.push(v);
         }
         app.ingest(Snapshot::Fast(FastSnap {
-            per_core: vec![12.0, 45.0, 78.0, 30.0],
             total_cpu: 41.0,
             processes: vec![
                 ProcInfo { pid: 101, name: "kernel_task".into(), cpu: 12.5, mem: 512_000 },
@@ -206,7 +225,6 @@ impl App {
             }
             Snapshot::Slow(s) => self.slow = Some(s),
         }
-        self.clamp_selection();
         self.dirty = true;
     }
 
@@ -219,8 +237,18 @@ impl App {
         }
     }
 
-    fn clamp_selection(&mut self) {
-        self.selected = self.selected.min(self.focused_len().saturating_sub(1));
+    /// The focused panel's cursor, clamped to its current length. Clamping on
+    /// read rather than on every ingest is what lets a panel shrink and regrow
+    /// without a fixup pass — and means no caller can observe an out-of-range
+    /// cursor in the first place.
+    pub fn selected(&self) -> usize {
+        self.selected[self.focus.index()].min(self.focused_len().saturating_sub(1))
+    }
+
+    /// Move the focused panel's cursor. Other panels keep theirs.
+    pub fn select(&mut self, i: usize) {
+        self.selected[self.focus.index()] = i;
+        self.dirty = true;
     }
 
     pub fn visible_processes(&self) -> &[ProcInfo] {
@@ -283,18 +311,12 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Tab => {
-                self.focus = match self.focus {
-                    Focus::Processes => Focus::Localhost,
-                    Focus::Localhost => Focus::Sessions,
-                    Focus::Sessions => Focus::Others,
-                    Focus::Others => Focus::Processes,
-                };
-                self.selected = 0;
-            }
-            KeyCode::Up => self.selected = self.selected.saturating_sub(1),
+            // Each panel keeps its own cursor across a Tab, so returning to a
+            // card puts you back where you left it.
+            KeyCode::Tab => self.focus = self.focus.next(),
+            KeyCode::Up => self.select(self.selected().saturating_sub(1)),
             KeyCode::Down => {
-                self.selected = (self.selected + 1).min(self.focused_len().saturating_sub(1));
+                self.select((self.selected() + 1).min(self.focused_len().saturating_sub(1)));
             }
             KeyCode::Char('c') => {
                 self.sort_by = SortBy::Cpu;
@@ -306,14 +328,14 @@ impl App {
             }
             KeyCode::Char('k') => match self.focus {
                 Focus::Processes => {
-                    if let Some(p) = self.visible_processes().get(self.selected) {
+                    if let Some(p) = self.visible_processes().get(self.selected()) {
                         self.pending_kill = Some((p.pid, p.name.clone()));
                     }
                 }
                 // Only dev servers are killable. Sessions and system agents are
                 // deliberately not one keypress from termination.
                 Focus::Localhost => {
-                    if let Some(r) = self.localhost_rows().get(self.selected) {
+                    if let Some(r) = self.localhost_rows().get(self.selected()) {
                         let n = r.ports.len();
                         let ports = if n == 1 { "port" } else { "ports" };
                         self.pending_kill = Some((r.pid, format!("{} ({n} {ports})", r.label)));
@@ -378,7 +400,6 @@ mod tests {
 
     fn demo_fast() -> FastSnap {
         FastSnap {
-            per_core: vec![50.0],
             total_cpu: 50.0,
             processes: vec![
                 ProcInfo { pid: 1, name: "hog".into(), cpu: 90.0, mem: 100 },
@@ -421,7 +442,7 @@ mod tests {
         a.on_key(KeyEvent::from(KeyCode::Down));
         a.on_key(KeyEvent::from(KeyCode::Down));
         a.on_key(KeyEvent::from(KeyCode::Down));
-        assert_eq!(a.selected, 1); // only 2 processes
+        assert_eq!(a.selected(), 1); // only 2 processes
     }
 
     #[test]
@@ -601,7 +622,7 @@ mod tests {
         for _ in 0..15 {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
-        assert_eq!(a.selected, 9);
+        assert_eq!(a.selected(), 9);
     }
 
     #[test]
@@ -625,7 +646,7 @@ mod tests {
     fn kill_works_on_a_localhost_port_row() {
         let mut a = App::demo();
         a.focus = Focus::Localhost;
-        a.selected = 0; // demo()'s first localhost row is glassbook-frontend
+        a.select(0); // demo()'s first localhost row is glassbook-frontend
         press(&mut a, 'k');
         let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
         assert_eq!(pid, 501);
@@ -638,7 +659,7 @@ mod tests {
         for focus in [Focus::Sessions, Focus::Others] {
             let mut a = App::demo();
             a.focus = focus;
-            a.selected = 0;
+            a.select(0);
             press(&mut a, 'k');
             assert!(
                 a.pending_kill.is_none(),
@@ -673,28 +694,35 @@ mod tests {
     }
 
     #[test]
-    fn kill_is_inert_on_sessions_and_others() {
-        for focus in ["Sessions", "Others"] {
-            let mut a = App::demo();
-            a.focus = if focus == "Sessions" { Focus::Sessions } else { Focus::Others };
-            a.selected = 0;
-            a.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-            assert!(
-                a.pending_kill.is_none(),
-                "{focus} must not be killable — ending a session mid-conversation \
-                 or killing a system agent must not be one keypress away"
-            );
-        }
+    fn each_panel_keeps_its_own_cursor() {
+        // One shared cursor let moving the selection in one card scroll and
+        // re-highlight another. Panels have independent lengths and
+        // independent scroll positions, so they get independent cursors.
+        let mut a = App::demo();
+        a.on_key(KeyEvent::from(KeyCode::Down)); // Processes -> 1
+        a.on_key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)); // -> Localhost
+        assert_eq!(a.selected(), 0, "a freshly focused panel starts at its own cursor");
+        a.on_key(KeyEvent::from(KeyCode::Down)); // Localhost -> 1
+
+        a.focus = Focus::Processes;
+        assert_eq!(a.selected(), 1, "the process cursor must survive another panel moving");
+        a.focus = Focus::Sessions;
+        assert_eq!(a.selected(), 0, "sessions was never moved");
     }
 
     #[test]
-    fn kill_still_works_on_a_localhost_row() {
-        let mut a = App::demo();
+    fn a_cursor_is_clamped_to_its_own_panels_length() {
+        // Panels are different lengths; a cursor parked past the end of a
+        // shorter one must read as that panel's last row, not out of range.
+        let mut a = App::demo(); // 5 processes, 2 localhost rows, 4 sessions
+        for _ in 0..9 {
+            a.on_key(KeyEvent::from(KeyCode::Down));
+        }
+        assert_eq!(a.selected(), 4, "Down stops at the last process");
         a.focus = Focus::Localhost;
-        a.selected = 0;
-        a.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-        let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
-        assert_eq!(pid, 501);
-        assert!(label.contains("glassbook-frontend") && label.contains('3'), "got {label}");
+        a.select(9);
+        assert_eq!(a.selected(), 1, "clamped to the 2-row localhost card");
+        a.focus = Focus::Processes;
+        assert_eq!(a.selected(), 4, "clamping one panel must not disturb another");
     }
 }

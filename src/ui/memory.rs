@@ -3,42 +3,65 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::App;
 use crate::sampler::PressureLevel;
-use crate::units::fmt_bytes;
-use super::{font, theme};
+use crate::units::{fmt_bytes, fmt_gib};
+use super::{font, gauge, theme};
 
+/// Split `width` cells across `parts` in proportion to their sizes, summing to
+/// exactly `width`.
+///
+/// Every non-zero part gets at least one cell, so a small segment still shows
+/// its colour instead of disappearing. The previous version promised that too,
+/// then broke it while reconciling rounding drift: it decremented whichever
+/// segment was currently widest, with no floor, so `[1,1,1,1]` across 2 cells
+/// came back as `[1,1,0,0]` — two segments silently gone.
+///
+/// When there are more non-zero parts than cells, that promise is
+/// unkeepable — so the largest parts take the cells and the smallest go
+/// unrendered, which is the least misleading way to run out of room.
 pub fn segment_widths(parts: &[u64], width: u16) -> Vec<u16> {
     let total: u64 = parts.iter().sum();
-    if total == 0 {
-        return vec![0; parts.len()];
+    let mut widths = vec![0u16; parts.len()];
+    if total == 0 || width == 0 {
+        return widths;
     }
-    let mut widths: Vec<u16> = parts
-        .iter()
-        .map(|&p| {
-            if p == 0 { 0 } else { ((p as f64 / total as f64) * width as f64).round().max(1.0) as u16 }
-        })
-        .collect();
-    // reconcile rounding drift against the largest segment
-    let mut diff = widths.iter().sum::<u16>() as i32 - width as i32;
-    while diff != 0 {
-        let i = widths
-            .iter()
-            .enumerate()
-            .max_by_key(|(_, &w)| w)
-            .map(|(i, _)| i)
-            .unwrap();
-        if diff > 0 { widths[i] -= 1; diff -= 1; } else { widths[i] += 1; diff += 1; }
+
+    // Largest first, so both the shortfall case and the leftover-cell
+    // tie-break below resolve toward the segments that matter most.
+    let mut order: Vec<usize> = (0..parts.len()).filter(|&i| parts[i] > 0).collect();
+    order.sort_by_key(|&i| std::cmp::Reverse(parts[i]));
+
+    if width as usize <= order.len() {
+        for &i in order.iter().take(width as usize) {
+            widths[i] = 1;
+        }
+        return widths;
+    }
+
+    // One cell each, then share out what's left by largest remainder — the
+    // standard apportionment, which sums to `width` exactly by construction
+    // rather than by a fixup loop afterwards.
+    let extra = width as usize - order.len();
+    let mut remainders: Vec<(usize, f64)> = Vec::with_capacity(order.len());
+    let mut handed_out = 0usize;
+    for &i in &order {
+        let exact = parts[i] as f64 / total as f64 * extra as f64;
+        let floor = exact.floor();
+        widths[i] = 1 + floor as u16;
+        handed_out += floor as usize;
+        remainders.push((i, exact - floor));
+    }
+    // Ties keep `order`'s largest-part-first sequence: sort_by is stable.
+    remainders.sort_by(|a, b| b.1.total_cmp(&a.1));
+    for &(i, _) in remainders.iter().take(extra - handed_out) {
+        widths[i] += 1;
     }
     widths
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = theme::panel_block("Memory", false);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
+    let inner = gauge::frame(f, area, "Memory");
     let Some(mem) = app.medium.as_ref().and_then(|m| m.memory.as_ref()) else {
-        f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), inner);
-        return;
+        return gauge::unavailable(f, inner);
     };
 
     let state = match mem.pressure {
@@ -70,9 +93,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         // the narrowest full-tier card is 28 wide (120-col terminal) — pack
         // it across as many rows as it needs instead of clipping mid-value.
         let used = mem.app + mem.wired + mem.compressed;
-        let used_gib = used as f64 / 1_073_741_824.0;
-        let precise = format!("{used_gib:.1}G");
-        let coarse = format!("{used_gib:.0}G");
+        let precise = fmt_gib(used);
+        let coarse = format!("{:.0}G", used as f64 / 1024.0_f64.powi(3));
         let hero = font::hero_lines(&precise, &coarse, inner.width, pcolor);
 
         let mut body = legend_lines(&labels, &colors, &parts, inner.width);
@@ -93,8 +115,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         // that's 28 chars — exactly the narrowest width — but drop the
         // "swap" label as a fallback so it still can't clip mid-value if
         // swap ever grows past that.
-        let used_g = format!("{:.1}G", mem.swap_used as f64 / 1_073_741_824.0);
-        let total_g = format!("{:.1}G", mem.swap_total as f64 / 1_073_741_824.0);
+        let (used_g, total_g) = (fmt_gib(mem.swap_used), fmt_gib(mem.swap_total));
         let full_tail = format!(" · swap {used_g}/{total_g}");
         let short_tail = format!(" · {used_g}/{total_g}");
         let tail = if state.len() + full_tail.chars().count() <= inner.width as usize {
@@ -381,5 +402,50 @@ mod tests {
         let w = segment_widths(&[100, 0, 100], 20);
         assert_eq!(w[1], 0);
         assert_eq!(w.iter().sum::<u16>(), 20);
+    }
+
+    /// The reconcile loop this replaced would decrement whichever segment was
+    /// widest, with no floor, so a non-zero part could be reconciled down to
+    /// zero cells and vanish from the bar. Swept rather than spot-checked,
+    /// since the failure only showed up at particular width/part combinations.
+    #[test]
+    fn a_nonzero_part_keeps_a_cell_whenever_the_width_allows_one() {
+        let cases: [&[u64]; 5] = [
+            &[1, 1, 1, 1],
+            &[10, 1, 1, 1],
+            &[100, 1, 1, 1],
+            &[4_000_000_000, 2_000_000_000, 1_000_000_000, 9_000_000_000],
+            &[1, 0, 1, 0],
+        ];
+        for parts in cases {
+            let nonzero = parts.iter().filter(|&&p| p > 0).count();
+            for width in 0u16..=64 {
+                let got = segment_widths(parts, width);
+                assert_eq!(
+                    got.iter().sum::<u16>(),
+                    width,
+                    "{parts:?} at {width}: widths must sum to the full width"
+                );
+                for (&p, &w) in parts.iter().zip(&got) {
+                    assert!(p > 0 || w == 0, "{parts:?} at {width}: a zero part took cells");
+                }
+                if width as usize >= nonzero {
+                    assert!(
+                        parts.iter().zip(&got).all(|(&p, &w)| p == 0 || w >= 1),
+                        "{parts:?} at {width}: a non-zero segment was squeezed to 0 cells: {got:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// When there are fewer cells than non-zero parts the minimum cannot be
+    /// kept at all. The cells must go to the largest parts rather than to
+    /// whichever segment rounding happened to favour.
+    #[test]
+    fn too_few_cells_keeps_the_largest_parts() {
+        assert_eq!(segment_widths(&[1, 9, 2, 8], 2), vec![0, 1, 0, 1]);
+        assert_eq!(segment_widths(&[5, 1, 1, 1], 1), vec![1, 0, 0, 0]);
+        assert_eq!(segment_widths(&[5, 1, 1, 1], 0), vec![0, 0, 0, 0]);
     }
 }
