@@ -413,3 +413,53 @@ fn processes_card_no_longer_contains_the_old_hint_text() {
         "the old combined hint line should no longer live inside the Processes card"
     );
 }
+
+/// The selected process row's highlight must be one unbroken block. Every
+/// span in the row derives its style from `base` — which carries
+/// `bg(BG_CELL)` when selected — except the two micro-bars, which were
+/// built from a fresh `Style::default().fg(gradient(..))`. That dropped the
+/// background, so the bar cells fell through to the frame's `BASE` and cut
+/// two dark notches out of the highlight. Asserts contiguity across the
+/// row's whole drawn extent rather than just checking the bar cells, so any
+/// future span that forgets the row background also trips this.
+#[test]
+fn selected_process_row_highlight_is_contiguous_across_its_bars() {
+    let app = App::demo(); // focus defaults to Processes, selected to 0
+    let buf = draw_buffer_at(&app, 160, 45);
+
+    let lines: Vec<String> = (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect();
+    let y = lines
+        .iter()
+        .position(|l| l.contains("kernel_task"))
+        .expect("demo's top process row should be on screen") as u16;
+
+    let highlighted: Vec<u16> = (0..buf.area.width)
+        .filter(|&x| buf[(x, y)].style().bg == Some(theme::BG_CELL))
+        .collect();
+    assert!(!highlighted.is_empty(), "selected row should be highlighted at all");
+
+    let (first, last) = (highlighted[0], *highlighted.last().unwrap());
+    let gaps: Vec<(u16, String, Option<ratatui::style::Color>)> = (first..=last)
+        .filter(|&x| buf[(x, y)].style().bg != Some(theme::BG_CELL))
+        .map(|x| (x, buf[(x, y)].symbol().to_string(), buf[(x, y)].style().bg))
+        .collect();
+    assert!(
+        gaps.is_empty(),
+        "selected row {y} highlight breaks at {gaps:?} (row spans x={first}..={last})"
+    );
+
+    // Contiguity alone can't see the mem bar: it's the row's *last* span, so
+    // an unhighlighted mem bar shrinks `last` instead of registering as an
+    // interior gap. Check the bar cells by symbol as well, so both bars are
+    // covered.
+    let unhighlighted_bars: Vec<u16> = (0..buf.area.width)
+        .filter(|&x| matches!(buf[(x, y)].symbol(), "▮" | "▯"))
+        .filter(|&x| buf[(x, y)].style().bg != Some(theme::BG_CELL))
+        .collect();
+    assert!(
+        unhighlighted_bars.is_empty(),
+        "selected row {y}: micro-bar cells at x={unhighlighted_bars:?} dropped the row background"
+    );
+}

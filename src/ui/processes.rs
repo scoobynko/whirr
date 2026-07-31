@@ -58,13 +58,18 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let bar = |fill: usize| {
             format!("{}{}", "▮".repeat(fill), "▯".repeat(BAR_W - fill))
         };
+        // Both bars take their colour from `base.fg(..)` rather than a fresh
+        // `Style::default().fg(..)`: `base` carries the selected row's
+        // background, and a fresh style would drop it, leaving the bar cells
+        // to fall through to the frame's BASE and cut two dark notches out of
+        // the highlight. Same reason `pid` uses `base.fg(theme::DIM)`.
         lines.push(Line::from(vec![
             Span::styled(format!("{:>6} ", p.pid), base.fg(theme::DIM)),
             Span::styled(format!("{:<24.24} ", p.name), base),
             Span::styled(format!("{:>5.1}% ", p.cpu), base),
-            Span::styled(bar(cpu_fill), Style::default().fg(theme::gradient(p.cpu / 100.0))),
+            Span::styled(bar(cpu_fill), base.fg(theme::gradient(p.cpu / 100.0))),
             Span::styled(format!(" {:>9} ", fmt_bytes(p.mem)), base),
-            Span::styled(bar(mem_fill), Style::default().fg(theme::gradient(mem_pct / 100.0))),
+            Span::styled(bar(mem_fill), base.fg(theme::gradient(mem_pct / 100.0))),
         ]));
     }
 
