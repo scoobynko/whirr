@@ -60,9 +60,12 @@ mod tests {
 
     #[test]
     fn reads_real_values() {
+        // chip and os_version come from plain sysctls a VM answers too, so
+        // they are checked unconditionally; the physical P/E core split is not.
         let s = SystemStatic::read();
         assert!(s.chip.contains("Apple"));
         assert!(!s.os_version.is_empty());
+        crate::mac::needs_real_hardware!();
         assert!(s.p_cores > 0 && s.e_cores > 0);
     }
 }

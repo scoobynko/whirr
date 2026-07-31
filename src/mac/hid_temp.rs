@@ -135,6 +135,7 @@ impl TempSensor {
 mod tests {
     #[test]
     fn cpu_temp_plausible() {
+        crate::mac::needs_real_hardware!();
         let t = super::TempSensor::new().expect("HID client");
         let c = t.read().expect("at least one CPU temp sensor");
         assert!((10.0..120.0).contains(&c), "got {c}");
