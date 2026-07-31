@@ -140,4 +140,24 @@ mod tests {
         assert_ne!(short, tall, "short and tall bars in the same chart must not share a flat colour");
         assert_eq!(tall, theme::ACCENT, "the tallest bar should render in the full caller colour");
     }
+
+    #[test]
+    fn lowest_nonzero_bar_stays_distinct_from_base() {
+        // A single-eighth bar against a large max (finest possible non-zero
+        // fraction of the peak) must still render clearly apart from BASE,
+        // not fade into the background it's blended toward.
+        let mut t = Terminal::new(TestBackend::new(1, 8)).unwrap();
+        t.draw(|f| super::render(f, f.area(), &[1], 64, Style::default().fg(theme::ACCENT)))
+            .unwrap();
+        let buf = t.backend().buffer().clone();
+        let fg = buf[(0, 7)].fg; // bottom row: the one filled eighth
+        let ch = |c: Color| match c {
+            Color::Rgb(r, g, b) => (i32::from(r), i32::from(g), i32::from(b)),
+            _ => panic!(),
+        };
+        let (r0, g0, b0) = ch(theme::BASE);
+        let (r1, g1, b1) = ch(fg);
+        let dist = (r1 - r0).abs() + (g1 - g0).abs() + (b1 - b0).abs();
+        assert!(dist > 20, "lowest non-zero bar colour {fg:?} too close to BASE {:?}", theme::BASE);
+    }
 }

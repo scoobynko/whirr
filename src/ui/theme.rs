@@ -40,12 +40,23 @@ pub fn blend(from: Color, to: Color, t: f32) -> Color {
     Color::Rgb(lerp(fr, tr), lerp(fg, tg), lerp(fb, tb))
 }
 
+/// Below this ramp factor a non-zero value is floored up to it, so the
+/// dimmest visible bar still reads as distinct from `BASE` instead of
+/// blending almost exactly into it. Matches `burst::MIN_BRIGHT` — the same
+/// problem (a colour blended toward the background disappearing at low
+/// coverage) gets the same fix.
+const MIN_RAMP: f32 = 0.5;
+
 /// Darken `color` toward `BASE` by factor `t` (0.0 = `BASE`, 1.0 = the full
 /// `color`). Used by sparkline bars so a short bar is a dim version of the
 /// chart's own colour and a tall bar is the full colour, instead of every
-/// bar being one flat shade.
+/// bar being one flat shade. Any `t` above zero is floored to `MIN_RAMP` so a
+/// bar that exists at all stays visible; `t == 0.0` (no bar) still renders as
+/// exactly `BASE`.
 pub fn ramp(color: Color, t: f32) -> Color {
-    blend(BASE, color, t)
+    let t = t.clamp(0.0, 1.0);
+    let floored = if t > 0.0 { t.max(MIN_RAMP) } else { 0.0 };
+    blend(BASE, color, floored)
 }
 
 pub fn temp_color(c: f32) -> Color {
@@ -121,6 +132,22 @@ mod tests {
         let (r_dim, g_dim, b_dim) = ch(ramp(ACCENT, 0.2));
         let (r_bright, g_bright, b_bright) = ch(ramp(ACCENT, 1.0));
         assert!(r_dim <= r_bright && g_dim < g_bright && b_dim < b_bright);
+    }
+
+    #[test]
+    fn ramp_floors_the_lowest_nonzero_bar_away_from_base() {
+        // A bar at a sliver of its max (well below MIN_RAMP) must still
+        // render meaningfully distinct from BASE, not fade into it — the
+        // same defect burst.rs already fixed for its fringe dots.
+        let ch = |c: Color| match c { Color::Rgb(r, g, b) => (i32::from(r), i32::from(g), i32::from(b)), _ => panic!() };
+        let dimmest = ramp(ACCENT, 0.01);
+        assert_ne!(dimmest, BASE);
+        let (r0, g0, b0) = ch(BASE);
+        let (r1, g1, b1) = ch(dimmest);
+        let dist = (r1 - r0).abs() + (g1 - g0).abs() + (b1 - b0).abs();
+        assert!(dist > 20, "lowest non-zero bar colour {dimmest:?} too close to BASE {BASE:?}");
+        // A genuinely absent bar (t == 0.0) must still render as exactly BASE.
+        assert_eq!(ramp(ACCENT, 0.0), BASE);
     }
 
     #[test]
