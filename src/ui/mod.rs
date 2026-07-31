@@ -68,8 +68,11 @@ use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
 ///   only 60 — a terminal that is merely narrow can still show the full
 ///   design by trading a second band for the width. This is what keeps
 ///   sizes like 103x45 on the real visuals.
-/// - **Compact (anything smaller)**: the pre-refresh design — 3-row header
-///   with the hand-drawn fan, 10-row gauges, no hero numbers.
+/// - **Compact (anything smaller)**: 5-row header and 8-row gauges. It shares
+///   the burst fan and the bitmap wordmark with the tiers above — only the
+///   sizes differ — so the one thing that actually distinguishes it is that
+///   the gauge cards carry plain readouts instead of hero numbers, there
+///   being no room for a 5-row hero in an 8-row band.
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     // Paint the whole frame with the near-black base first, before anything
@@ -108,11 +111,18 @@ pub fn draw(f: &mut Frame, app: &App) {
     render_footer(f, screen[1], app);
 
     let chunks = Layout::vertical([
-        Constraint::Length(if hero_tier { 9 } else { 3 }),
+        // Compact is 5, not 3: both tiers now share one 5-row bitmap wordmark
+        // instead of the compact tier keeping its own block-glyph face, which
+        // broke up in Terminal.app (see `ui/header.rs`).
+        Constraint::Length(if hero_tier { 9 } else { 5 }),
         Constraint::Length(match (full, grid) {
             (_, true) => 24, // two 12-row bands
             (true, _) => 12,
-            _ => 10,
+            // 8, not 10: the compact cards had two rows of slack (Memory's
+            // four detail lines were the tallest content in the band), and the
+            // header needs them more now that it carries the 5-row wordmark.
+            // This keeps the body the same size it was before that change.
+            _ => 8,
         }),
         Constraint::Min(6),
     ])

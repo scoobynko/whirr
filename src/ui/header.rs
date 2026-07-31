@@ -7,35 +7,38 @@ use super::theme;
 use crate::app::App;
 use crate::units::fmt_duration;
 
-// Compact-tier wordmark (3 rows) — kept verbatim for small terminals.
-const LOGO: [&str; 3] = [
-    "█ █ █ █ █ █ █▀█ █▀█",
-    "█ █ █ █▀█ █ █▀▄ █▀▄",
-    "▀▄▀▄▀ █ █ █ █ █ █ █",
-];
+// Compact tier used to carry its own 3-row wordmark drawn with foreground
+// block/half-block glyphs (`█ █ █ █▀█ █▀▄`). Terminal.app draws those from the
+// font's outlines rather than as native rectangles, so the letters seamed and
+// broke up at small sizes — the same defect `ui/font.rs` documents for the
+// hero digits. Both tiers now share one background-filled bitmap face, which
+// is why the compact header band is 5 rows rather than 3.
 
-// Full-tier wordmark: W H I R R, built from the same background-filled pixel
+// Wordmark: W H I R R, built from the same background-filled pixel
 // bitmap as the hero font (`ui/font.rs::glyph`) rather than drawn with
 // foreground block characters — see that module's doc comment for why
 // (Terminal.app seams foreground block glyphs but never a cell background).
-// The compact tier keeps its own 3-row wordmark above: this face is 5 rows
-// and the compact header band is only 3.
+// Shared by both tiers: the compact header band is sized to this face's 5
+// rows rather than carrying a separate, smaller one.
 fn logo4_lines() -> Vec<Line<'static>> {
     font::bitmap_lines(&font::big_text("WHIRR"), theme::ACCENT)
 }
 
-// Compact-tier 2-arm fan (4 frames) — kept verbatim.
-const FAN_FRAMES: [[&str; 3]; 4] = [
-    ["  │  ", "  ✻  ", "  │  "],
-    ["   ╱ ", "  ✻  ", " ╱   "],
-    ["     ", "──✻──", "     "],
-    [" ╲   ", "  ✻  ", "   ╲ "],
-];
-
-// Full-tier fan: a radial burst of counter-rotating ray halves on a braille
-// dot canvas — see `ui/burst.rs`.
+// The fan is the braille burst at every size — a radial spray of
+// counter-rotating ray halves (see `ui/burst.rs`), which rasterizes to
+// whatever rect it is handed. The compact tier used to substitute four
+// hand-drawn `✻` frames; they were the last of the pre-refresh assets and
+// read as a generic spinner rather than as whirr's fan.
 const FAN_COLS: u16 = 19;
 const FAN_ROWS: u16 = 7;
+// Below 11x5 the burst degrades into an undifferentiated blob — too few
+// braille dots to separate ten rays from the hub — so the compact tier gets
+// the smallest size that still reads as a burst.
+const COMPACT_FAN_COLS: u16 = 11;
+const COMPACT_FAN_ROWS: u16 = 5;
+/// Columns the compact wordmark needs: the shared bitmap face is 22 wide
+/// (see `logo4_is_five_uniform_rows_within_budget`), plus two of padding.
+const COMPACT_LOGO_COLS: u16 = 24;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Full tier needs 9 rows: 1 (top pad) + 7 (band, sized to the fan) +
@@ -79,28 +82,40 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
 }
 
 fn render_compact(f: &mut Frame, area: Rect, app: &App) {
+    // At very small terminal heights the outer layout can squeeze this band
+    // below the bitmap face's 5 rows. A clipped bitmap reads as a broken
+    // wordmark, so drop to plain styled text instead — it needs one row, and
+    // being ordinary text it has no block glyphs to seam.
+    if area.height < COMPACT_FAN_ROWS {
+        let cols = Layout::horizontal([Constraint::Length(8), Constraint::Min(0)]).split(area);
+        f.render_widget(
+            Paragraph::new(Line::styled("whirr", Style::default().fg(theme::ACCENT).bold())),
+            cols[0],
+        );
+        f.render_widget(facts_paragraph(app), cols[1]);
+        return;
+    }
+    // The fan is dropped rather than shrunk further when the terminal is too
+    // narrow to carry both it and the wordmark alongside the facts — a
+    // squeezed burst reads as noise, and the facts are the useful content.
+    let room_for_fan = area.width >= COMPACT_LOGO_COLS + COMPACT_FAN_COLS + 20;
+    let fan_cols = if room_for_fan { COMPACT_FAN_COLS } else { 0 };
     let cols = Layout::horizontal([
-        Constraint::Length(21), // logo
-        Constraint::Length(7),  // fan
-        Constraint::Min(0),     // ambient facts
+        Constraint::Length(COMPACT_LOGO_COLS),
+        Constraint::Length(fan_cols),
+        Constraint::Min(0), // ambient facts
     ])
     .split(area);
 
-    let logo_lines: Vec<Line> = LOGO
-        .iter()
-        .map(|l| Line::styled(*l, Style::default().fg(theme::ACCENT).bold()))
-        .collect();
-    f.render_widget(Paragraph::new(logo_lines), cols[0]);
+    // Same bitmap face as the full tier, painted as cell backgrounds.
+    f.render_widget(Paragraph::new(logo4_lines()), cols[0]);
 
-    if !app.no_fan {
-        // The compact fan keeps its 4 hand-drawn frames; a quarter turn of the
-        // burst's angle advances it by one.
-        let frame = FAN_FRAMES[(app.fan_angle_deg / 90.0) as usize % 4];
-        let fan_lines: Vec<Line> = frame
-            .iter()
-            .map(|l| Line::styled(*l, Style::default().fg(theme::DIM)))
-            .collect();
-        f.render_widget(Paragraph::new(fan_lines), cols[1]);
+    if !app.no_fan && room_for_fan {
+        let fan = Rect {
+            height: COMPACT_FAN_ROWS.min(area.height),
+            ..cols[1]
+        };
+        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, app.fan_angle_deg)), fan);
     }
 
     f.render_widget(facts_paragraph(app), cols[2]);
@@ -131,13 +146,6 @@ mod tests {
 
     use crate::app::App;
     use crate::ui::theme;
-
-    #[test]
-    fn logo_is_three_uniform_rows_within_budget() {
-        let w = super::LOGO[0].chars().count();
-        assert!(super::LOGO.iter().all(|r| r.chars().count() == w));
-        assert!(w <= 21);
-    }
 
     #[test]
     fn logo4_is_five_uniform_rows_within_budget() {
@@ -183,14 +191,6 @@ mod tests {
         assert_eq!(filled_cells, expected, "background-filled cell count must match the WHIRR bitmap");
     }
 
-    #[test]
-    fn fan_frames_are_uniform() {
-        for frame in super::FAN_FRAMES {
-            let w = frame[0].chars().count();
-            assert!(frame.iter().all(|r| r.chars().count() == w));
-        }
-    }
-
     fn draw_header(w: u16, h: u16) -> String {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
         let app = App::demo();
@@ -204,12 +204,40 @@ mod tests {
         s.chars().any(|c| ('\u{2801}'..='\u{28FF}').contains(&c))
     }
 
+    /// Both tiers draw the same braille burst, just at different sizes. The
+    /// compact tier used to substitute four hand-drawn `✻` frames — the last
+    /// of the pre-refresh assets — so this pins that they are gone and that
+    /// the smaller header still gets a real burst rather than nothing.
     #[test]
-    fn full_tier_needs_nine_rows_for_the_burst() {
-        assert!(has_braille(&draw_header(80, 9)), "burst missing at height 9");
-        for h in [5, 6, 7, 8] {
-            assert!(!has_braille(&draw_header(80, h)), "height {h} must fall back to compact");
-        }
+    fn both_tiers_draw_the_burst_at_their_own_size() {
+        let full = draw_header(80, 9);
+        let compact = draw_header(80, 5);
+        assert!(has_braille(&full), "burst missing from the full header");
+        assert!(has_braille(&compact), "burst missing from the compact header");
+        assert!(!compact.contains('✻'), "hand-drawn compact fan should be gone");
+        let ink = |s: &str| s.chars().filter(|&c| ('\u{2801}'..='\u{28FF}').contains(&c)).count();
+        assert!(
+            ink(&full) > ink(&compact),
+            "the full tier's 19x7 burst should carry more ink than the compact 11x5 one"
+        );
+    }
+
+    /// The compact wordmark must be background-filled cells too, not the old
+    /// foreground block face — that face is exactly what broke up in
+    /// Terminal.app at small sizes.
+    #[test]
+    fn compact_wordmark_is_also_painted_as_background_fills() {
+        let mut t = Terminal::new(TestBackend::new(80, 5)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+        let filled = buf.content().iter().filter(|c| c.style().bg == Some(theme::ACCENT)).count();
+        let expected: usize = crate::ui::font::big_text("WHIRR")
+            .iter()
+            .flat_map(|r| r.chars())
+            .filter(|&c| c == '#')
+            .count();
+        assert_eq!(filled, expected, "compact wordmark bitmap pixel count mismatch");
     }
 
     #[test]

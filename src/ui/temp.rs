@@ -24,33 +24,19 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(Paragraph::new(hero), rows[0]);
         render_chart(f, rows[1], app, color);
     } else {
-        let cols = Layout::horizontal([Constraint::Length(3), Constraint::Min(4)]).split(inner);
-        render_thermometer(f, cols[0], t, color);
-
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(cols[1]);
+        // A 3-column vertical thermometer (`▐█▌` per row, a `●` bulb at the
+        // bottom) used to sit to the left of the reading here. Dropped: it
+        // restated the number printed right beside it, it read as a stray
+        // progress bar rather than a temperature, and stacked `▐█▌` rows seam
+        // in Terminal.app the same way every other block-glyph column does
+        // (see `ui/spark.rs`). The chart takes the full card width instead.
+        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(inner);
         f.render_widget(
             Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
             rows[0],
         );
         render_chart(f, rows[1], app, color);
     }
-}
-
-fn render_thermometer(f: &mut Frame, area: Rect, t: f32, color: Color) {
-    let h = area.height as usize;
-    if h < 2 {
-        return;
-    }
-    let fill_ratio = ((t - 30.0) / 75.0).clamp(0.0, 1.0);
-    let filled = ((h - 1) as f32 * fill_ratio).round() as usize;
-    let mut lines = Vec::with_capacity(h);
-    for row in 0..h - 1 {
-        let from_bottom = h - 1 - row;
-        let ch = if from_bottom <= filled { "▐█▌" } else { "▐ ▌" };
-        lines.push(Line::styled(ch, Style::default().fg(color)));
-    }
-    lines.push(Line::styled(" ● ", Style::default().fg(color)));
-    f.render_widget(Paragraph::new(lines), area);
 }
 
 fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
@@ -95,7 +81,7 @@ mod tests {
     }
 
     #[test]
-    fn hero_drops_thermometer_when_room() {
+    fn neither_tier_draws_a_thermometer() {
         // demo temp = 88.0 → "88.0°C". The hero digits are background-filled
         // cells now, not foreground quadrant glyphs, so prove the "8" reads
         // correctly by sampling bg colours off the buffer and matching them
@@ -117,11 +103,16 @@ mod tests {
                 "no buffer row has bitmap {want:?} for \"88.0°C\""
             );
         }
+        // The vertical `▐█▌` thermometer is gone from both tiers now, not
+        // just the hero one — it restated the reading printed beside it and
+        // seamed in Terminal.app. The compact tier keeps the numeric readout
+        // and gives the rest of the card to the chart.
         let full = draw(40, 12);
         assert!(!full.contains("▐"), "thermometer should be gone in hero tier");
         let compact = draw(40, 10);
-        assert!(compact.contains("▐"), "thermometer missing in compact tier");
-        assert!(compact.contains("88.0°C"));
+        assert!(!compact.contains("▐"), "thermometer should be gone in compact tier too");
+        assert!(!compact.contains("●"), "thermometer bulb should be gone as well");
+        assert!(compact.contains("88.0°C"), "compact tier should still print the reading");
     }
 
     #[test]

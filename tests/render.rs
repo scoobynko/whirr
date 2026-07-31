@@ -135,13 +135,16 @@ fn stock_80x24_fits_without_starving_header_or_ports() {
     let lines = draw_grid(80, 24);
     assert_eq!(lines.len(), 24);
 
-    // Header is 3 rows, gauges 10: the first gauge card's title lands
-    // exactly on row 3, unaffected by anything the body split below decides.
-    assert_eq!(row_of(&lines, "CPU"), 3, "gauges row wasn't given its fixed height");
+    // Header is 5 rows, gauges 8: the first gauge card's title lands exactly
+    // on row 5, unaffected by anything the body split below decides. (These
+    // were 3 and 10 before the compact tier adopted the 5-row bitmap
+    // wordmark; the two rows the header gained came out of the gauge band's
+    // slack, not the body, so every body assertion below is unchanged.)
+    assert_eq!(row_of(&lines, "CPU"), 5, "gauges row wasn't given its fixed height");
 
-    // Body starts at row 13 (3 + 10). The process table's Max(13) cap can't
-    // be met at body height 10, so it shrinks to 6 rows; Ports starts right
-    // after and gets its Min(4) floor.
+    // Body still starts at row 13 (5 + 8) and is still 10 rows. The process
+    // table's Max(13) cap can't be met at that height, so it shrinks to 6
+    // rows; Ports starts right after and gets its Min(4) floor.
     let processes_row = row_of(&lines, "Processes");
     assert_eq!(processes_row, 13, "process table didn't start where the body begins");
     let ports_row = row_of(&lines, "Ports");
@@ -260,15 +263,25 @@ fn full_tier_shows_hero_font_and_burst_fan() {
 }
 
 #[test]
-fn compact_tier_keeps_old_visuals() {
+fn compact_tier_shares_the_brand_assets_but_not_the_hero_numbers() {
+    // The compact tier used to be the whole pre-refresh design: its own
+    // block-glyph wordmark, four hand-drawn `✻` fan frames, and a thermometer.
+    // It now shares the burst and the bitmap wordmark with the larger tiers —
+    // what still separates it is that the gauge cards carry plain readouts
+    // rather than hero numbers.
     let app = App::demo();
     let c = draw_app_at(&app, 80, 24);
-    assert!(!has_braille(&c), "burst fan must not render at 80x24");
+    assert!(has_braille(&c), "burst fan should render at 80x24");
+    assert!(!c.contains('✻'), "hand-drawn fan should be gone");
+    assert!(!c.contains('▐'), "temp thermometer should be gone");
+
+    // The only ACCENT-backed bitmap at this size is the header wordmark: the
+    // gauge cards are below the hero threshold, so none of them paint one.
     let buf = draw_buffer_at(&app, 80, 24);
-    assert!(
-        !buf.content().iter().any(|cell| cell.style().bg == Some(theme::ACCENT)),
-        "hero/logo bitmap must not render at 80x24"
-    );
+    let accent_cells = buf.content().iter().filter(|c| c.style().bg == Some(theme::ACCENT)).count();
+    let wordmark: usize =
+        whirr::ui::font::big_text("WHIRR").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+    assert_eq!(accent_cells, wordmark, "compact tier should paint the wordmark bitmap and no hero numbers");
     assert!(c.contains("88.0°C"), "compact temp readout missing");
 }
 
@@ -347,9 +360,15 @@ fn card_band_at_120x40() {
 
 #[test]
 fn tier_boundary_is_exactly_120x30() {
-    assert!(has_braille(&draw_at(120, 30)), "120x30 must be full tier");
-    assert!(!has_braille(&draw_at(119, 30)), "119x30 must be compact");
-    assert!(!has_braille(&draw_at(120, 29)), "120x29 must be compact");
+    // The burst fan renders at every tier now, so it can no longer tell them
+    // apart. The header band's height can: 9 rows for full/grid, 5 for
+    // compact — so the first gauge card's title row is the discriminator.
+    // 119x30 and 120x29 are both too small for the grid tier as well (it
+    // needs 40 rows), so both must land on compact.
+    let first_gauge_row = |w, h| row_of(&draw_grid(w, h), "CPU");
+    assert_eq!(first_gauge_row(120, 30), 9, "120x30 must be full tier");
+    assert_eq!(first_gauge_row(119, 30), 5, "119x30 must be compact");
+    assert_eq!(first_gauge_row(120, 29), 5, "120x29 must be compact");
 }
 
 // --- global footer -------------------------------------------------------
@@ -502,7 +521,6 @@ fn two_by_two_grid_falls_back_below_either_floor() {
     for (w, h, why) in [(103u16, 39u16, "one row below the 40-row floor"), (69, 45, "one column below the 70-col floor")] {
         let app = App::demo();
         let lines = draw_grid_app(&app, w, h);
-        assert!(!has_braille(&draw_app_at(&app, w, h)), "{w}x{h} ({why}): should fall back to the compact header");
-        assert_eq!(row_of(&lines, "CPU"), 3, "{w}x{h} ({why}): compact header is 3 rows, so gauges start at row 3");
+        assert_eq!(row_of(&lines, "CPU"), 5, "{w}x{h} ({why}): compact header is 5 rows, so gauges start at row 5");
     }
 }
