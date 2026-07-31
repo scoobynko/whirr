@@ -463,3 +463,46 @@ fn selected_process_row_highlight_is_contiguous_across_its_bars() {
         "selected row {y}: micro-bar cells at x={unhighlighted_bars:?} dropped the row background"
     );
 }
+
+/// Narrow-but-tall terminals get the full visual design via a 2x2 gauge grid
+/// rather than dropping to the compact tier. 103x45 fails the `full` gate on
+/// width (needs 120 for four hero cards abreast) but has ample height, so the
+/// gauges stack two-by-two and every card reaches hero width.
+#[test]
+fn narrow_but_tall_gets_the_hero_design_in_a_two_by_two_grid() {
+    let app = App::demo();
+    let lines = draw_grid_app(&app, 103, 45);
+
+    // Header keeps its full 9-row band, so the first gauge row starts at 9.
+    assert!(has_braille(&draw_app_at(&app, 103, 45)), "burst fan missing at 103x45");
+    assert_eq!(row_of(&lines, "CPU"), 9, "first gauge band should start below the 9-row header");
+    // Two cards per band: CPU/Temp share a title row, Power/Memory share the next.
+    assert_eq!(row_of(&lines, "Temp"), 9, "Temp should sit beside CPU, not below it");
+    assert_eq!(row_of(&lines, "Power"), 21, "Power should start the second gauge band");
+    assert_eq!(row_of(&lines, "Memory"), 21, "Memory should sit beside Power");
+
+    // Hero bitmaps actually render — the whole point of the grid. CPU's "41%"
+    // hero is ACCENT-backed, as is the header wordmark.
+    let buf = draw_buffer_at(&app, 103, 45);
+    let hero_cells = (0..buf.area.width)
+        .flat_map(|x| (9..21u16).map(move |y| (x, y)))
+        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(theme::ACCENT))
+        .count();
+    let expected: usize =
+        whirr::ui::font::big_text("41%").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+    assert_eq!(hero_cells, expected, "CPU hero bitmap missing or wrong size in the 2x2 grid");
+}
+
+/// Both floors of the 2x2 grid, checked one step below each. The grid costs a
+/// second 12-row band, so it needs 40 rows (header 9 + bands 24 + body 6 +
+/// footer 1); and it needs 70 columns so all four cards are present. Falling
+/// below either must land back on the compact tier, not on a broken layout.
+#[test]
+fn two_by_two_grid_falls_back_below_either_floor() {
+    for (w, h, why) in [(103u16, 39u16, "one row below the 40-row floor"), (69, 45, "one column below the 70-col floor")] {
+        let app = App::demo();
+        let lines = draw_grid_app(&app, w, h);
+        assert!(!has_braille(&draw_app_at(&app, w, h)), "{w}x{h} ({why}): should fall back to the compact header");
+        assert_eq!(row_of(&lines, "CPU"), 3, "{w}x{h} ({why}): compact header is 3 rows, so gauges start at row 3");
+    }
+}

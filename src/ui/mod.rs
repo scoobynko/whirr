@@ -20,7 +20,9 @@ use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
 /// Final responsive layout. Panels drop out in priority order as space gets
 /// tight: ports first, then network, then power, then temp — processes and
 /// CPU always survive. The gauges row splits into as many equal columns as
-/// there are visible gauge panels (cpu + temp? + power? + memory).
+/// there are visible gauge panels (cpu + temp? + power? + memory) — except in
+/// the grid tier described below, which is always exactly four cards arranged
+/// in two rows of two.
 ///
 /// The body below the gauges has two shapes:
 ///
@@ -56,9 +58,18 @@ use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
 /// the outer `Layout::split` above, before `render_left_column` is ever
 /// called, so nothing inside it can squeeze them.
 ///
-/// Full visual tier (>=120x30): padded header with the braille burst fan
-/// (9 rows) and hero-number gauge cards (12 rows). Compact tier: standard
-/// header (3 rows) and compact gauges (10 rows).
+/// Three visual tiers, in order of preference:
+///
+/// - **Full (>=120x30)**: padded header with the braille burst fan (9 rows)
+///   and one row of four hero-number gauge cards (12 rows).
+/// - **Grid (>=70x40, narrower than full)**: the same header and the same
+///   hero cards, but the four gauges stacked 2x2 across two 12-row bands.
+///   A hero card needs 30 columns, so four abreast need 120 while two need
+///   only 60 — a terminal that is merely narrow can still show the full
+///   design by trading a second band for the width. This is what keeps
+///   sizes like 103x45 on the real visuals.
+/// - **Compact (anything smaller)**: the pre-refresh design — 3-row header
+///   with the hand-drawn fan, 10-row gauges, no hero numbers.
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
     // Paint the whole frame with the near-black base first, before anything
@@ -75,6 +86,19 @@ pub fn draw(f: &mut Frame, app: &App) {
     // gauge cards. Needs width for the ~27-col hero strings (4 cards x 30
     // cols) and height for header 9 + gauges 12 + a useful body.
     let full = area.height >= 30 && area.width >= 120;
+    // Narrow-but-tall terminals used to fail the `full` gate on width alone
+    // and drop the entire frame to the compact design. But the width failure
+    // is an artifact of the 1x4 gauge row, not a real constraint: a hero card
+    // needs 30 columns (28 inner + 2 borders), so four abreast need 120 while
+    // two abreast need only 60. Stacking the gauges 2x2 gets every card to
+    // hero width on terminals that are merely narrow, at the cost of a second
+    // 12-row band — hence the 40-row floor (header 9 + two bands 24 + body 6 +
+    // footer 1). The 70-column floor is `show_power`'s, so the grid always has
+    // exactly four cards to place and never a half-empty second row.
+    let grid = !full && area.width >= 70 && area.height >= 40;
+    // Both arrangements get the padded header and hero-sized cards; only the
+    // compact tier keeps the old 3-row header and 10-row gauges.
+    let hero_tier = full || grid;
 
     // One bare row for the global keybind footer, taken off the bottom
     // before anything else is laid out — it costs exactly one row and has
@@ -84,28 +108,45 @@ pub fn draw(f: &mut Frame, app: &App) {
     render_footer(f, screen[1], app);
 
     let chunks = Layout::vertical([
-        Constraint::Length(if full { 9 } else { 3 }),
-        Constraint::Length(if full { 12 } else { 10 }),
+        Constraint::Length(if hero_tier { 9 } else { 3 }),
+        Constraint::Length(match (full, grid) {
+            (_, true) => 24, // two 12-row bands
+            (true, _) => 12,
+            _ => 10,
+        }),
         Constraint::Min(6),
     ])
     .split(content);
 
     header::render(f, chunks[0], app);
 
-    let n = 1 + usize::from(show_temp) + usize::from(show_power) + 1; // cpu + temp? + power? + memory
-    let gauges = Layout::horizontal(vec![Constraint::Ratio(1, n as u32); n]).split(chunks[1]);
-    let mut gi = 0;
-    cpu::render(f, gauges[gi], app);
-    gi += 1;
-    if show_temp {
-        temp::render(f, gauges[gi], app);
+    if grid {
+        // Two bands of two. `grid` already guarantees show_temp and show_power,
+        // so all four cards are always present and no cell goes empty.
+        let half = |r: Rect| Layout::horizontal([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(r);
+        let bands =
+            Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(chunks[1]);
+        let (top, bottom) = (half(bands[0]), half(bands[1]));
+        cpu::render(f, top[0], app);
+        temp::render(f, top[1], app);
+        power::render(f, bottom[0], app);
+        memory::render(f, bottom[1], app);
+    } else {
+        let n = 1 + usize::from(show_temp) + usize::from(show_power) + 1; // cpu + temp? + power? + memory
+        let gauges = Layout::horizontal(vec![Constraint::Ratio(1, n as u32); n]).split(chunks[1]);
+        let mut gi = 0;
+        cpu::render(f, gauges[gi], app);
         gi += 1;
+        if show_temp {
+            temp::render(f, gauges[gi], app);
+            gi += 1;
+        }
+        if show_power {
+            power::render(f, gauges[gi], app);
+            gi += 1;
+        }
+        memory::render(f, gauges[gi], app);
     }
-    if show_power {
-        power::render(f, gauges[gi], app);
-        gi += 1;
-    }
-    memory::render(f, gauges[gi], app);
 
     let body = chunks[2];
     // Three side-by-side cards need ~40 columns each; below that the single
