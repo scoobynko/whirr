@@ -26,8 +26,20 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(Paragraph::new("…").style(Style::default().fg(theme::DIM)), inner);
         return;
     }
+    // The old always-on hint row moved to the global footer (see
+    // `ui::render_footer`); this status line only exists — and only claims a
+    // row — when there's actually a kill confirmation or message to show.
+    let status = if let Some((pid, name)) = &app.pending_kill {
+        Some(Line::styled(
+            format!("kill {name} ({pid})? y/n"),
+            Style::default().fg(theme::RED).bold(),
+        ))
+    } else {
+        app.message.as_ref().map(|msg| Line::styled(msg.clone(), Style::default().fg(theme::AMBER)))
+    };
+
     let mem_total = app.fast.as_ref().map_or(1, |f| f.mem_total).max(1);
-    let visible_rows = inner.height.saturating_sub(1) as usize; // 1 line for footer
+    let visible_rows = inner.height.saturating_sub(status.is_some() as u16) as usize;
     let offset = app.selected.saturating_sub(visible_rows.saturating_sub(1));
 
     let mut lines = Vec::new();
@@ -56,20 +68,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         ]));
     }
 
-    let footer = if let Some((pid, name)) = &app.pending_kill {
-        Line::styled(
-            format!("kill {name} ({pid})? y/n"),
-            Style::default().fg(theme::RED).bold(),
-        )
-    } else if let Some(msg) = &app.message {
-        Line::styled(msg.clone(), Style::default().fg(theme::AMBER))
-    } else {
-        Line::styled(
-            "↑↓ select · c/m sort · k kill · tab focus · q quit",
-            Style::default().fg(theme::DIM),
-        )
-    };
-    lines.push(footer);
+    if let Some(status) = status {
+        lines.push(status);
+    }
     f.render_widget(Paragraph::new(lines), inner);
 }
 

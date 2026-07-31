@@ -13,8 +13,9 @@ pub mod temp;
 pub mod theme;
 
 use ratatui::prelude::*;
+use ratatui::widgets::Paragraph;
 
-use crate::app::{App, MAX_VISIBLE_PROCS};
+use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
 
 /// Final responsive layout. Panels drop out in priority order as space gets
 /// tight: ports first, then network, then power, then temp — processes and
@@ -69,12 +70,19 @@ pub fn draw(f: &mut Frame, app: &App) {
     // cols) and height for header 9 + gauges 12 + a useful body.
     let full = area.height >= 30 && area.width >= 120;
 
+    // One bare row for the global keybind footer, taken off the bottom
+    // before anything else is laid out — it costs exactly one row and has
+    // no border/block, so it doesn't shift where the header/gauges land.
+    let screen = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
+    let content = screen[0];
+    render_footer(f, screen[1], app);
+
     let chunks = Layout::vertical([
         Constraint::Length(if full { 9 } else { 3 }),
         Constraint::Length(if full { 12 } else { 10 }),
         Constraint::Min(6),
     ])
-    .split(area);
+    .split(content);
 
     header::render(f, chunks[0], app);
 
@@ -126,6 +134,26 @@ pub fn draw(f: &mut Frame, app: &App) {
     } else {
         render_left_column(f, body, app, show_ports);
     }
+}
+
+/// Global keybind footer: one bare row, left-aligned, no border. Only shows
+/// keys that actually do something for the current focus — `c/m sort` is a
+/// process-table concept, `k kill` only applies to the two killable panels
+/// (Processes, Localhost) — everything else is always available. Items sit
+/// in fixed positions (select, sort?, kill?, tab, quit) so the line reads as
+/// entries appearing/disappearing as focus changes, not reshuffling.
+fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    let show_sort = matches!(app.focus, Focus::Processes);
+    let show_kill = matches!(app.focus, Focus::Processes | Focus::Localhost);
+    let items: [Option<&str>; 5] = [
+        Some("↑↓ select"),
+        show_sort.then_some("c/m sort"),
+        show_kill.then_some("k kill"),
+        Some("tab focus"),
+        Some("q quit"),
+    ];
+    let text = items.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    f.render_widget(Paragraph::new(text).style(Style::default().fg(theme::DIM)), area);
 }
 
 /// Processes stacked over ports (when ports fit).

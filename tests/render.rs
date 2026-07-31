@@ -1,14 +1,26 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
-use whirr::app::App;
+use whirr::app::{App, Focus};
 use whirr::ui;
 
 fn draw_at(w: u16, h: u16) -> String {
-    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
     let app = App::demo();
-    terminal.draw(|f| ui::draw(f, &app)).unwrap();
+    draw_app_at(&app, w, h)
+}
+
+fn draw_app_at(app: &App, w: u16, h: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
+    terminal.draw(|f| ui::draw(f, app)).unwrap();
     let buf = terminal.backend().buffer().clone();
     buf.content().iter().map(|c| c.symbol()).collect()
+}
+
+/// `App::demo()` with `focus` overridden, for exercising the global footer's
+/// per-focus content.
+fn demo_with_focus(focus: Focus) -> App {
+    let mut app = App::demo();
+    app.focus = focus;
+    app
 }
 
 fn has_braille(s: &str) -> bool {
@@ -18,7 +30,11 @@ fn has_braille(s: &str) -> bool {
 /// Row/col grid of a render, for asserting on exact panel boundaries rather
 /// than "some text appears somewhere in the flattened buffer".
 fn draw_grid(w: u16, h: u16) -> Vec<String> {
-    let flat = draw_at(w, h);
+    draw_grid_app(&App::demo(), w, h)
+}
+
+fn draw_grid_app(app: &App, w: u16, h: u16) -> Vec<String> {
+    let flat = draw_app_at(app, w, h);
     let cells: Vec<char> = flat.chars().collect();
     cells.chunks(w as usize).map(|row| row.iter().collect()).collect()
 }
@@ -60,13 +76,15 @@ fn tiny_size_collapses_to_essentials() {
 }
 
 // Regression test for the 80x24 body split: with show_ports/show_network
-// true and a compact-tier header (3) + gauges (10), the body gets 11 rows.
-// Paired against Min(4), Max(13) hands the process table up to its cap but
-// not below the point where ports would starve — at body height 11 that
-// solves to (7, 4): the process table shrinks to 7 rows and ports gets
-// exactly its Min(4) floor. This also pins that the header/gauges rows
-// (resolved by the outer `Layout::split` before this body split ever runs)
-// stay their fixed sizes regardless of what the body split below does.
+// true and a compact-tier header (3) + gauges (10), one row is now taken off
+// the bottom of the whole screen for the global keybind footer before this
+// split ever runs, so the body gets 10 rows (not 11). Paired against Min(4),
+// Max(13) hands the process table up to its cap but not below the point
+// where ports would starve — at body height 10 that solves to (6, 4): the
+// process table shrinks to 6 rows and ports gets exactly its Min(4) floor.
+// This also pins that the header/gauges rows (resolved by the outer
+// `Layout::split` before this body split ever runs) stay their fixed sizes
+// regardless of what the body split below does.
 #[test]
 fn stock_80x24_fits_without_starving_header_or_ports() {
     let lines = draw_grid(80, 24);
@@ -77,16 +95,19 @@ fn stock_80x24_fits_without_starving_header_or_ports() {
     assert_eq!(row_of(&lines, "CPU"), 3, "gauges row wasn't given its fixed height");
 
     // Body starts at row 13 (3 + 10). The process table's Max(13) cap can't
-    // be met at body height 11, so it shrinks to 7 rows; Ports starts right
-    // after and gets its Min(4) floor, ending exactly on the last row.
+    // be met at body height 10, so it shrinks to 6 rows; Ports starts right
+    // after and gets its Min(4) floor.
     let processes_row = row_of(&lines, "Processes");
     assert_eq!(processes_row, 13, "process table didn't start where the body begins");
     let ports_row = row_of(&lines, "Ports");
-    assert_eq!(ports_row - processes_row, 7, "process table should have shrunk to 7 rows, not its full 13-row cap");
-    assert_eq!(ports_row, 20, "ports card should start right after the shrunk process table");
-    // Ports keeps its Min(4) floor: 4 rows (20..=23) reaching exactly the
-    // last row of the 24-row terminal, rather than being squeezed further.
-    assert_eq!(lines.len() - 1, ports_row + 3, "ports card should occupy exactly its Min(4) floor");
+    assert_eq!(ports_row - processes_row, 6, "process table should have shrunk to 6 rows (was 7 before the footer row was taken off the bottom), not its full 13-row cap");
+    assert_eq!(ports_row, 19, "ports card should start right after the shrunk process table");
+    // Ports keeps its Min(4) floor: 4 rows (19..=22). The last row (23) is
+    // now the global footer, not part of the ports card — before the footer
+    // existed, ports' floor happened to land exactly on the terminal's last
+    // row; now it ends one row short of that to make room for the footer.
+    assert_eq!(lines.len() - 2, ports_row + 3, "ports card should occupy exactly its Min(4) floor, one row above the global footer");
+    assert!(lines[23].starts_with('↑'), "last row should be the global footer");
 }
 
 // At >=120 columns, `three_cards` is always active (it only checks width),
@@ -195,13 +216,18 @@ fn card_band_dimensions(w: u16, h: u16) -> (usize, usize) {
 
 #[test]
 fn card_band_has_adequate_space_at_120x30() {
-    // At 120x30 with full tier (header 9 + gauges 12), body gets only 9 rows,
-    // so the split is floor-bound: Processes claims its Min(4) floor and the
-    // card band gets whatever's left, regardless of the Max(10) cap.
+    // At 120x30 with full tier (header 9 + gauges 12) and one row now taken
+    // off the bottom of the whole screen for the global keybind footer,
+    // body gets only 8 rows (was 9 before the footer existed), so the split
+    // is floor-bound: Processes claims its Min(4) floor and the card band
+    // gets whatever's left, regardless of the Max(10) cap. That leaves the
+    // card band only 2 content rows here (was 3) — the tightest size this
+    // app supports absorbs the footer's row entirely as a real, visible
+    // regression rather than the constraints quietly hiding it.
     let (total, content) = card_band_dimensions(120, 30);
     eprintln!("120x30: card band total={} rows, content={} rows", total, content);
-    assert_eq!(total, 5, "At 120x30 card band should be 5 rows total");
-    assert_eq!(content, 3, "At 120x30 card band should have 3 content rows");
+    assert_eq!(total, 4, "At 120x30 card band should be 4 rows total");
+    assert_eq!(content, 2, "At 120x30 card band should have 2 content rows");
 }
 
 #[test]
@@ -227,4 +253,66 @@ fn tier_boundary_is_exactly_120x30() {
     assert!(has_braille(&draw_at(120, 30)), "120x30 must be full tier");
     assert!(!has_braille(&draw_at(119, 30)), "119x30 must be compact");
     assert!(!has_braille(&draw_at(120, 29)), "120x29 must be compact");
+}
+
+// --- global footer -------------------------------------------------------
+
+#[test]
+fn footer_kill_shows_only_for_killable_panels() {
+    for focus in [Focus::Processes, Focus::Localhost] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(c.contains("k kill"), "{focus:?} should show k kill");
+    }
+    for focus in [Focus::Sessions, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(!c.contains("k kill"), "{focus:?} must not show k kill — k is inert there");
+    }
+}
+
+#[test]
+fn footer_sort_shows_only_for_processes() {
+    let c = draw_app_at(&demo_with_focus(Focus::Processes), 120, 40);
+    assert!(c.contains("c/m sort"), "Processes should show c/m sort");
+    for focus in [Focus::Localhost, Focus::Sessions, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(!c.contains("c/m sort"), "{focus:?} must not show c/m sort — sorting is a process-table concept");
+    }
+}
+
+#[test]
+fn footer_quit_and_tab_focus_show_for_every_focus() {
+    for focus in [Focus::Processes, Focus::Localhost, Focus::Sessions, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(c.contains("tab focus"), "{focus:?} should show tab focus (global)");
+        assert!(c.contains("q quit"), "{focus:?} should show q quit (global)");
+        assert!(c.contains("↑↓ select"), "{focus:?} should show ↑↓ select (global)");
+    }
+}
+
+#[test]
+fn footer_renders_on_the_last_row_of_the_screen() {
+    for (w, h) in [(120u16, 30u16), (160, 45), (80, 24)] {
+        let lines = draw_grid(w, h);
+        assert_eq!(lines.len(), h as usize);
+        let last = &lines[h as usize - 1];
+        assert!(
+            last.contains("↑↓ select") && last.contains("tab focus") && last.contains("q quit"),
+            "{w}x{h}: footer should render on the screen's last row, got {last:?}"
+        );
+    }
+}
+
+#[test]
+fn processes_card_no_longer_contains_the_old_hint_text() {
+    // Focus::Sessions so the global footer itself can never happen to
+    // produce this exact 5-item string (it drops c/m sort and k kill for
+    // Sessions) — an absence check with Focus::Processes would be
+    // meaningless, since the footer legitimately renders that same string
+    // for that focus. With the footer ruled out, this can only fail if the
+    // Processes card still renders its own copy of the old hint line.
+    let c = draw_app_at(&demo_with_focus(Focus::Sessions), 160, 45);
+    assert!(
+        !c.contains("↑↓ select · c/m sort · k kill · tab focus · q quit"),
+        "the old combined hint line should no longer live inside the Processes card"
+    );
 }
