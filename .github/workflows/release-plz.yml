@@ -37,7 +37,17 @@ jobs:
 
   release:
     name: tag and publish
-    runs-on: ubuntu-latest
+    # macOS, not ubuntu: `cargo publish` verifies a crate by *building* the
+    # packaged tarball, and whirr does not compile on Linux — `#[link(name =
+    # "IOKit", kind = "framework")]` is an Apple-only link kind, so the build
+    # fails with E0455 before anything is uploaded. (The `release-pr` job above
+    # only reads Cargo.toml and git history, never compiles, so it stays on the
+    # cheaper runner.)
+    #
+    # The failure was safe — verification happens before the upload, so no tag,
+    # no release and no crates.io version were created — but it did mean this
+    # job could never have published anything.
+    runs-on: macos-14
     concurrency:
       group: release-plz-release
       cancel-in-progress: false
