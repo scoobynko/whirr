@@ -1,0 +1,69 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A superseded run has nothing to say; cancel it rather than pay for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test + clippy
+    # arm64 macOS, because that is the only target whirr builds for.
+    #
+    # Note that this runner is a *virtualised* Apple Silicon host: it compiles
+    # and runs everything, but exposes no HID temperature sensors, no IOReport
+    # "Energy Model" group, and no `hw.perflevel*` core counts. The three tests
+    # that read those skip themselves here (see `mac::needs_real_hardware`) and
+    # stay strict on a real Mac. Anything sensor-related therefore needs a
+    # local run to be genuinely covered.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # What `mac::on_real_hardware` keys on. Printed so that if the sensor
+      # tests ever start failing here again, the reason is already in the log
+      # rather than needing a round trip to find out.
+      - name: runner hardware signals
+        run: |
+          for k in kern.hv_vmm_present hw.nperflevels \
+                   hw.perflevel0.physicalcpu hw.perflevel1.physicalcpu \
+                   machdep.cpu.brand_string; do
+            printf '%-34s %s\n' "$k" "$(sysctl -n $k 2>&1 || echo '<absent>')"
+          done
+
+      # `-D warnings` is the enforced gate for this repo; `cargo fmt --check`
+      # deliberately is not, because the codebase is hand-formatted.
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --all-targets
+
+      # The Homebrew formula's `test do` block runs `whirr --version`. If that
+      # ever stops working the break should surface here, not in a user's
+      # `brew install`.
+      - name: release binary answers --version and --help
+        run: |
+          cargo build --release
+          ./target/release/whirr --version
+          ./target/release/whirr --help
+
+      # crates.io rejects a crate missing metadata, and packaging problems
+      # (a bad `exclude`, a missing README) otherwise only surface during the
+      # release itself, when it is too late to fix quietly.
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run

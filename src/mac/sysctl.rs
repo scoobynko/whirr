@@ -56,6 +56,11 @@ mod tests {
 
     #[test]
     fn reads_real_values() {
+        // No `needs_real_hardware!` guard here any more: the only field that
+        // needed one was the physical P/E core split, and `p_cores`/`e_cores`
+        // are gone — nothing read them. Both remaining fields come from plain
+        // sysctls that a virtualised host answers too, so this stays strict
+        // everywhere, CI included.
         let s = SystemStatic::read();
         assert!(s.chip.contains("Apple"));
         assert!(!s.os_version.is_empty());
