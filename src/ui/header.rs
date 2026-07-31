@@ -2,6 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use super::burst;
+use super::font;
 use super::theme;
 use crate::app::App;
 use crate::units::fmt_duration;
@@ -13,17 +14,15 @@ const LOGO: [&str; 3] = [
     "▀▄▀▄▀ █ █ █ █ █ █ █",
 ];
 
-// Full-tier wordmark: W H I R R in the same 4-row quadrant style as the hero
-// font (ui/font.rs), transcribed from FIGlet `smblock`, with a space between
-// letters — kerned tight (14 cols) the strokes run together at this weight.
-// The compact tier keeps its own 3-row wordmark below: this face is 4 rows and
-// the compact header band is only 3.
-const LOGO4: [&str; 4] = [
-    "▌ ▌ ▌ ▌ ▜▘ ▛▀▖ ▛▀▖",
-    "▌▖▌ ▙▄▌ ▐  ▙▄▘ ▙▄▘",
-    "▙▚▌ ▌ ▌ ▐  ▌▚  ▌▚ ",
-    "▘ ▘ ▘ ▘ ▀▘ ▘ ▘ ▘ ▘",
-];
+// Full-tier wordmark: W H I R R, built from the same background-filled pixel
+// bitmap as the hero font (`ui/font.rs::glyph`) rather than drawn with
+// foreground block characters — see that module's doc comment for why
+// (Terminal.app seams foreground block glyphs but never a cell background).
+// The compact tier keeps its own 3-row wordmark above: this face is 4 rows
+// and the compact header band is only 3.
+fn logo4_lines() -> Vec<Line<'static>> {
+    font::bitmap_lines(&font::big_text("WHIRR"), theme::ACCENT)
+}
 
 // Compact-tier 2-arm fan (4 frames) — kept verbatim.
 const FAN_FRAMES: [[&str; 3]; 4] = [
@@ -57,11 +56,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     .split(area);
 
     let logo_area = Rect { y: area.y + 2, height: area.height.saturating_sub(2).min(4), ..cols[0] };
-    let logo_lines: Vec<Line> = LOGO4
-        .iter()
-        .map(|l| Line::styled(*l, Style::default().fg(theme::ACCENT).bold()))
-        .collect();
-    f.render_widget(Paragraph::new(logo_lines), logo_area);
+    f.render_widget(Paragraph::new(logo4_lines()), logo_area);
 
     if !app.no_fan {
         // The burst sits 19x7 centred in the 9-row band — a blank row above
@@ -146,10 +141,41 @@ mod tests {
 
     #[test]
     fn logo4_is_four_uniform_rows_within_budget() {
-        let w = super::LOGO4[0].chars().count();
-        assert_eq!(super::LOGO4.len(), 4);
-        assert!(super::LOGO4.iter().all(|r| r.chars().count() == w));
+        let rows = crate::ui::font::big_text("WHIRR");
+        assert_eq!(rows.len(), 4);
+        let w = rows[0].chars().count();
+        assert!(rows.iter().all(|r| r.chars().count() == w));
         assert!(w <= 26);
+    }
+
+    /// The wordmark used to be drawn with foreground quadrant/block
+    /// characters, which seam in Terminal.app (see `ui/font.rs`'s doc
+    /// comment). It must now be background-filled cells: every rendered
+    /// symbol in the logo area is a plain space, and the cells that should
+    /// be "ink" carry the accent colour as `bg` — sampled here directly from
+    /// the buffer rather than from rendered text, since a text dump can't
+    /// show a background colour.
+    #[test]
+    fn logo4_is_painted_as_background_fills_not_foreground_glyphs() {
+        let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let buf = t.backend().buffer().clone();
+
+        let logo_symbols: String = (0..26).flat_map(|x| (2..6).map(move |y| (x, y))).map(|(x, y)| buf[(x, y)].symbol().to_string()).collect();
+        assert!(
+            logo_symbols.chars().all(|c| c == ' '),
+            "logo area must render as spaces with a background colour, found {logo_symbols:?}"
+        );
+
+        let filled_cells = buf
+            .content()
+            .iter()
+            .filter(|cell| cell.style().bg == Some(theme::ACCENT))
+            .count();
+        let bitmap = crate::ui::font::big_text("WHIRR");
+        let expected: usize = bitmap.iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+        assert_eq!(filled_cells, expected, "background-filled cell count must match the WHIRR bitmap");
     }
 
     #[test]

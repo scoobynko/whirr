@@ -67,6 +67,8 @@ fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
+    use ratatui::style::Color;
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -78,11 +80,44 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16, app: &App) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        t.draw(|f| super::render(f, f.area(), app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
+    /// Reconstruct row `y` of the buffer as a `#`/space bitmap string by
+    /// sampling each cell's background colour — the only place a filled hero
+    /// pixel shows up now that hero digits are background fills rather than
+    /// foreground glyph characters (see `ui/font.rs`'s doc comment).
+    fn bg_bitmap_row(buf: &Buffer, y: u16, width: u16, color: Color) -> String {
+        (0..width).map(|x| if buf[(x, y)].style().bg == Some(color) { '#' } else { ' ' }).collect()
+    }
+
     #[test]
     fn hero_drops_thermometer_when_room() {
-        // demo temp = 88.0 → "88.0°C"
+        // demo temp = 88.0 → "88.0°C". The hero digits are background-filled
+        // cells now, not foreground quadrant glyphs, so prove the "8" reads
+        // correctly by sampling bg colours off the buffer and matching them
+        // against the same bitmap `hero_lines` was built from, rather than
+        // grepping the rendered text for glyph characters.
+        let app = App::demo();
+        let color = super::theme::temp_color(88.0);
+        let buf = draw_buffer(40, 12, &app);
+        // The card's border occupies row 0, so the hero rows start at y=1,
+        // not y=0 — scan every row and require each expected bitmap row to
+        // appear (as a substring, since it's left-padded by the border/x
+        // offset) somewhere in the buffer, rather than hard-coding its exact
+        // row/column position.
+        let rows: Vec<String> = (0..buf.area.height).map(|y| bg_bitmap_row(&buf, y, 40, color)).collect();
+        let expected = super::font::big_text("88.0°C");
+        for want in &expected {
+            assert!(
+                rows.iter().any(|row| row.contains(want.as_str())),
+                "no buffer row has bitmap {want:?} for \"88.0°C\""
+            );
+        }
         let full = draw(40, 12);
-        assert!(full.contains("▞▀▖ ▞▀▖    ▞▀▖ ▞▖ ▞▀▖"), "4-row hero row for \"88.0°C\" missing");
         assert!(!full.contains("▐"), "thermometer should be gone in hero tier");
         let compact = draw(40, 10);
         assert!(compact.contains("▐"), "thermometer missing in compact tier");
@@ -112,21 +147,22 @@ mod tests {
         // truncating mid-glyph. The precise-width row never fits inside 28
         // cols, so its top row is not a substring of the buffer; the coarse
         // row (23 cols) does fit and must appear intact.
-        let mut t = Terminal::new(TestBackend::new(30, 12)).unwrap();
         let mut app = App::demo();
         app.medium.as_mut().unwrap().temp_c = Some(1000.4);
-        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
-        let content: String =
-            t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
-        assert!(!content.contains('?'), "hero glyph fallback '?' should never render");
+        let color = super::theme::temp_color(1000.4);
+        let buf = draw_buffer(30, 12, &app);
+        // Sample the same 4 hero rows as bg-colour bitmaps rather than
+        // grepping rendered text: filled hero pixels carry `color` as their
+        // background now, and every cell's symbol is a plain space.
+        let rows: Vec<String> = (0..4).map(|y| bg_bitmap_row(&buf, y, 30, color)).collect();
         let precise_row0 = super::font::big_text("1000.4°C").remove(0);
         let coarse_row0 = super::font::big_text("1000°C").remove(0);
         assert!(
-            !content.contains(precise_row0.as_str()),
+            !rows.iter().any(|r| r.contains(precise_row0.as_str())),
             "full-precision hero row rendered intact — should have overflowed the 28-wide card"
         );
         assert!(
-            content.contains(coarse_row0.as_str()),
+            rows.iter().any(|r| r.contains(coarse_row0.as_str())),
             "coarse fallback row missing — hero should fall back to \"1000°C\" when precise overflows"
         );
     }

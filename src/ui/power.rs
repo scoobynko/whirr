@@ -89,6 +89,7 @@ fn render_spark(f: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -100,15 +101,34 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
     #[test]
     fn hero_when_room_compact_when_small() {
-        // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W"
+        // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W". The hero
+        // digits are background-filled cells now (see `ui/font.rs`'s doc
+        // comment for why), so verify the "7.9 W" bitmap landed by counting
+        // accent-bg cells, not by grepping rendered text for glyph chars.
         let full = draw(40, 12); // inner 38x10 → hero
-        assert!(full.contains("▛▀▌    ▞▀▖   ▌ ▌"), "4-row hero row for \"7.9 W\" missing");
+        let full_buf = draw_buffer(40, 12);
+        let filled =
+            full_buf.content().iter().filter(|c| c.style().bg == Some(super::theme::ACCENT)).count();
+        let expected: usize =
+            crate::ui::font::big_text("7.9 W").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+        assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"7.9 W\"");
         assert!(full.contains("cpu 6.4"), "power legend (cpu/gpu/ane) missing");
+
         let compact = draw(40, 10); // inner 38x8 → compact
         assert!(compact.contains("7.9 W"));
-        assert!(!compact.contains("▛▀▌    ▞▀▖   ▌ ▌"));
+        let compact_buf = draw_buffer(40, 10);
+        let compact_filled =
+            compact_buf.content().iter().any(|c| c.style().bg == Some(super::theme::ACCENT));
+        assert!(!compact_filled, "compact tier must not paint any hero bitmap pixels");
     }
 
     #[test]

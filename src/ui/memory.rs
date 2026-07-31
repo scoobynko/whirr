@@ -149,6 +149,7 @@ fn legend_lines(labels: &[&str], colors: &[Color], parts: &[u64], width: u16) ->
 mod tests {
     use super::segment_widths;
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -160,16 +161,37 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let app = App::demo();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
     #[test]
     fn hero_shows_used_gib_when_room() {
-        // demo used = 4G + 2G + 1G = 7_000_000_000 B = 6.5 GiB → "6.5G"
+        // demo used = 4G + 2G + 1G = 7_000_000_000 B = 6.5 GiB → "6.5G", in
+        // GREEN (demo pressure is Normal). The hero digits are
+        // background-filled cells now (see `ui/font.rs`'s doc comment), so
+        // verify the "6.5G" bitmap landed by counting pressure-colour-bg
+        // cells rather than grepping rendered text for glyph characters.
+        let full_buf = draw_buffer(40, 12);
+        let filled =
+            full_buf.content().iter().filter(|c| c.style().bg == Some(super::theme::GREEN)).count();
+        let expected: usize =
+            crate::ui::font::big_text("6.5G").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+        assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"6.5G\"");
+
         let full = draw(40, 12);
-        assert!(full.contains("▞▀▖    ▛▀▘ ▞▀▖"), "4-row hero row for \"6.5G\" missing");
         assert!(full.contains("pressure "), "pressure label missing");
         assert!(full.contains("NORMAL"), "pressure state missing");
         assert!(full.contains("swap 0 B / 953.7 MB"), "swap line missing or clipped");
+
+        let compact_buf = draw_buffer(40, 10);
+        let compact_filled =
+            compact_buf.content().iter().any(|c| c.style().bg == Some(super::theme::GREEN));
+        assert!(!compact_filled, "compact tier must not paint any hero bitmap pixels");
         let compact = draw(40, 10);
-        assert!(!compact.contains("▞▀▖    ▛▀▘ ▞▀▖"));
         assert!(compact.contains("pressure "));
     }
 

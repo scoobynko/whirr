@@ -10,10 +10,13 @@ fn draw_at(w: u16, h: u16) -> String {
 }
 
 fn draw_app_at(app: &App, w: u16, h: u16) -> String {
+    draw_buffer_at(app, w, h).content().iter().map(|c| c.symbol()).collect()
+}
+
+fn draw_buffer_at(app: &App, w: u16, h: u16) -> ratatui::buffer::Buffer {
     let mut terminal = Terminal::new(TestBackend::new(w, h)).unwrap();
     terminal.draw(|f| ui::draw(f, app)).unwrap();
-    let buf = terminal.backend().buffer().clone();
-    buf.content().iter().map(|c| c.symbol()).collect()
+    terminal.backend().buffer().clone()
 }
 
 /// `App::demo()` with `focus` overridden, for exercising the global footer's
@@ -213,20 +216,59 @@ fn narrow_terminals_get_the_single_grouped_card() {
     assert!(c.contains("Ports"), "the grouped Ports card should render below 120 cols");
 }
 
+/// Hero digits and the header wordmark used to be drawn with foreground
+/// quadrant/block characters, which seam in Terminal.app (see
+/// `ui/font.rs`'s doc comment for why). They're background-filled cells now,
+/// so this proves the fix by sampling `bg` colours off the buffer rather
+/// than grepping rendered text for glyph characters — every hero/logo cell's
+/// symbol is a plain space.
 #[test]
 fn full_tier_shows_hero_font_and_burst_fan() {
-    let c = draw_at(160, 45);
-    assert!(has_braille(&c), "burst fan missing");
-    assert!(c.contains("▙▚▌ ▌ ▌"), "4-row quadrant logo (W+H) missing");
-    assert!(c.contains("▚▄▌"), "cpu hero '4' glyph missing"); // total_cpu 41 → "41%"
-    assert!(c.contains("▞▗▖"), "hero '%' glyph missing");
+    let app = App::demo();
+    let buf = draw_buffer_at(&app, 160, 45);
+    assert!(has_braille(&draw_app_at(&app, 160, 45)), "burst fan missing");
+
+    // Header wordmark: some cell must carry the accent colour as background,
+    // and the count of such cells (in the header band, rows 0..9) must match
+    // the "WHIRR" bitmap exactly.
+    let wordmark_filled = (0..buf.area.width)
+        .flat_map(|x| (0..9u16).map(move |y| (x, y)))
+        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(theme::ACCENT))
+        .count();
+    let wordmark_expected: usize =
+        whirr::ui::font::big_text("WHIRR").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+    assert_eq!(wordmark_filled, wordmark_expected, "header wordmark bitmap pixel count mismatch");
+
+    // CPU hero (total_cpu 41 → "41%") and Power hero (6.4+1.2+0.3=7.9 →
+    // "7.9 W") both use ACCENT; both are visible at 160x45. Nothing else
+    // below the header paints ACCENT as a bg (Temp is AMBER at 88°C, Memory
+    // is GREEN at Normal pressure), so the total accent-bg pixel count below
+    // the header must equal exactly the sum of both hero bitmaps.
+    let cpu_hero_expected: usize =
+        whirr::ui::font::big_text("41%").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+    let power_hero_expected: usize =
+        whirr::ui::font::big_text("7.9 W").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+    let accent_filled_below_header = (0..buf.area.width)
+        .flat_map(|x| (9..buf.area.height).map(move |y| (x, y)))
+        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(theme::ACCENT))
+        .count();
+    assert_eq!(
+        accent_filled_below_header,
+        cpu_hero_expected + power_hero_expected,
+        "cpu+power hero bitmap pixel count mismatch for \"41%\" and \"7.9 W\""
+    );
 }
 
 #[test]
 fn compact_tier_keeps_old_visuals() {
-    let c = draw_at(80, 24);
+    let app = App::demo();
+    let c = draw_app_at(&app, 80, 24);
     assert!(!has_braille(&c), "burst fan must not render at 80x24");
-    assert!(!c.contains("▙▚▌ ▌ ▌"), "4-row quadrant logo must not render at 80x24");
+    let buf = draw_buffer_at(&app, 80, 24);
+    assert!(
+        !buf.content().iter().any(|cell| cell.style().bg == Some(theme::ACCENT)),
+        "hero/logo bitmap must not render at 80x24"
+    );
     assert!(c.contains("88.0°C"), "compact temp readout missing");
 }
 

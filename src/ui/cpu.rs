@@ -89,6 +89,7 @@ fn render_history(f: &mut Frame, area: Rect, app: &App) {
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
+    use ratatui::buffer::Buffer;
     use ratatui::Terminal;
 
     use crate::app::App;
@@ -103,11 +104,27 @@ mod tests {
         t.backend().buffer().content().iter().map(|c| c.symbol()).collect()
     }
 
+    fn draw_buffer(w: u16, h: u16) -> Buffer {
+        let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
+        let mut app = App::demo();
+        app.statics.e_cores = 2;
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.backend().buffer().clone()
+    }
+
     #[test]
     fn hero_with_strip_when_room() {
-        // demo total_cpu = 41.0 → "41%"
+        // demo total_cpu = 41.0 → "41%". The hero digits used to be drawn
+        // with foreground quadrant glyphs, which seam in Terminal.app — see
+        // `ui/font.rs`'s doc comment. They're background-filled cells now,
+        // so prove it by sampling the buffer's bg colours directly rather
+        // than looking for glyph characters in the rendered text.
         let full = draw(40, 12);
-        assert!(full.contains("▚▄▌"), "4-row '4' glyph missing");
+        let buf = draw_buffer(40, 12);
+        let filled = buf.content().iter().filter(|c| c.style().bg == Some(super::theme::ACCENT)).count();
+        let expected: usize =
+            crate::ui::font::big_text("41%").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
+        assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"41%\"");
         assert!(full.contains(" P "), "per-core strip P label missing");
         assert!(!full.contains(" 12 "), "numbered heatmap cell should be gone in hero tier");
     }
@@ -116,7 +133,9 @@ mod tests {
     fn compact_keeps_numbered_heatmap() {
         let compact = draw(40, 10);
         assert!(compact.contains(" 12"), "per-core numbered cell missing"); // demo core 0 at 12%
-        assert!(!compact.contains("▚▄▌"));
+        let buf = draw_buffer(40, 10);
+        let filled = buf.content().iter().any(|c| c.style().bg == Some(super::theme::ACCENT));
+        assert!(!filled, "compact tier must not paint any hero bitmap pixels");
     }
 
     #[test]
