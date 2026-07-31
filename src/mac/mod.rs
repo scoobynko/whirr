@@ -16,12 +16,21 @@ pub mod sysctl;
 /// false — which keeps them strict on a real Mac, where the assertions are
 /// the whole point.
 ///
-/// `hw.optional.arm64` is set on any arm64 macOS including a VM, so it can't
-/// be used here. The perflevel sysctls describe a physical P/E core split and
-/// are absent under virtualisation, which is exactly the distinction needed.
+/// Two independent signals, either of which is conclusive on its own:
+///
+/// - `kern.hv_vmm_present` is macOS's own hypervisor flag — 1 under a VM.
+/// - `hw.nperflevels` is 2 on every Apple Silicon chip, which all have both
+///   performance and efficiency cores. A virtualised host presents one uniform
+///   core set and reports 1.
+///
+/// Both are checked because either alone could be wrong on a host neither of
+/// us has seen. Note that `hw.optional.arm64` and `hw.perflevel0.physicalcpu`
+/// are *not* usable here: both are present on a virtualised arm64 host too.
 #[cfg(test)]
 pub(crate) fn on_real_hardware() -> bool {
-    sysctl::sysctl_u32("hw.perflevel0.physicalcpu").is_some_and(|n| n > 0)
+    let virtualised = sysctl::sysctl_u32("kern.hv_vmm_present").is_some_and(|v| v != 0);
+    let has_p_and_e_cores = sysctl::sysctl_u32("hw.nperflevels").is_some_and(|n| n >= 2);
+    !virtualised && has_p_and_e_cores
 }
 
 /// Skip the rest of a test when there is no physical sensor hardware to read.

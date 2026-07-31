@@ -34,6 +34,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # What `mac::on_real_hardware` keys on. Printed so that if the sensor
+      # tests ever start failing here again, the reason is already in the log
+      # rather than needing a round trip to find out.
+      - name: runner hardware signals
+        run: |
+          for k in kern.hv_vmm_present hw.nperflevels \
+                   hw.perflevel0.physicalcpu hw.perflevel1.physicalcpu \
+                   machdep.cpu.brand_string; do
+            printf '%-34s %s\n' "$k" "$(sysctl -n $k 2>&1 || echo '<absent>')"
+          done
+
       # `-D warnings` is the enforced gate for this repo; `cargo fmt --check`
       # deliberately is not, because the codebase is hand-formatted.
       - name: clippy
