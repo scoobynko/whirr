@@ -180,9 +180,12 @@ mod tests {
         .unwrap();
         let buf = t.backend().buffer().clone();
         // A single sample right-anchors to the last column (spark::render's
-        // tail-slicing places the newest/only sample at the right edge).
-        let down_bar = buf[(9, 0)].fg;
-        let up_bar = buf[(9, 1)].fg;
+        // tail-slicing places the newest/only sample at the right edge). Both
+        // samples are at max, so each bar is a completely full cell — those
+        // carry their colour as a background fill rather than a foreground
+        // block glyph, to avoid Terminal.app's seams (see `ui/spark.rs`).
+        let down_bar = buf[(9, 0)].bg;
+        let up_bar = buf[(9, 1)].bg;
         assert_eq!(down_bar, theme::ACCENT, "download band's full-height bar should be its own accent colour");
         assert_eq!(up_bar, theme::gradient(0.55), "upload band's full-height bar should be its own gradient colour, not accent");
         assert_ne!(down_bar, up_bar, "the two bands must not collapse to the same colour");

@@ -117,11 +117,13 @@ mod tests {
 
         // y=0 is the panel's top border, so the hero occupies y=1..=5 and the
         // chart's first row is y=6 — the row the strip used to own. The
-        // newest sample lands at the right edge, just inside the border.
+        // newest sample lands at the right edge, just inside the border. A
+        // completely full cell carries its colour as a background fill, not a
+        // '█' glyph (see `ui/spark.rs`), so assert on the background.
         let x = buf.area.width - 2;
         assert_eq!(
-            buf[(x, 6)].symbol(),
-            "█",
+            buf[(x, 6)].bg,
+            super::theme::ACCENT,
             "a 100% sample should fill the reclaimed row y=6; chart did not grow into it"
         );
     }
