@@ -107,7 +107,7 @@ mod tests {
     fn hero_with_strip_when_room() {
         // demo total_cpu = 41.0 → "41%"
         let full = draw(40, 12);
-        assert!(full.contains("▄  █"), "4-row '4' glyph missing");
+        assert!(full.contains("▚▄▌"), "4-row '4' glyph missing");
         assert!(full.contains(" P "), "per-core strip P label missing");
         assert!(!full.contains(" 12 "), "numbered heatmap cell should be gone in hero tier");
     }
@@ -116,7 +116,7 @@ mod tests {
     fn compact_keeps_numbered_heatmap() {
         let compact = draw(40, 10);
         assert!(compact.contains(" 12"), "per-core numbered cell missing"); // demo core 0 at 12%
-        assert!(!compact.contains("▄  █"));
+        assert!(!compact.contains("▚▄▌"));
     }
 
     #[test]

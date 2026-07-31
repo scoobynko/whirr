@@ -104,11 +104,11 @@ mod tests {
     fn hero_when_room_compact_when_small() {
         // demo power total = 6.4 + 1.2 + 0.3 = 7.9 → "7.9 W"
         let full = draw(40, 12); // inner 38x10 → hero
-        assert!(full.contains("▀▀▀█"), "4-row '7' glyph missing"); // '7' row 0
+        assert!(full.contains("▛▀▌    ▞▀▖   ▌ ▌"), "4-row hero row for \"7.9 W\" missing");
         assert!(full.contains("cpu 6.4"), "power legend (cpu/gpu/ane) missing");
         let compact = draw(40, 10); // inner 38x8 → compact
         assert!(compact.contains("7.9 W"));
-        assert!(!compact.contains("▀▀▀█"));
+        assert!(!compact.contains("▛▀▌    ▞▀▖   ▌ ▌"));
     }
 
     #[test]

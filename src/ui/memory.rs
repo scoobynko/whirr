@@ -164,12 +164,12 @@ mod tests {
     fn hero_shows_used_gib_when_room() {
         // demo used = 4G + 2G + 1G = 7_000_000_000 B = 6.5 GiB → "6.5G"
         let full = draw(40, 12);
-        assert!(full.contains("█▄▄ "), "4-row '6' glyph missing"); // '6' row 1
+        assert!(full.contains("▞▀▖    ▛▀▘ ▞▀▖"), "4-row hero row for \"6.5G\" missing");
         assert!(full.contains("pressure "), "pressure label missing");
         assert!(full.contains("NORMAL"), "pressure state missing");
         assert!(full.contains("swap 0 B / 953.7 MB"), "swap line missing or clipped");
         let compact = draw(40, 10);
-        assert!(!compact.contains("█▄▄ "));
+        assert!(!compact.contains("▞▀▖    ▛▀▘ ▞▀▖"));
         assert!(compact.contains("pressure "));
     }
 

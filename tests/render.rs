@@ -218,8 +218,8 @@ fn full_tier_shows_hero_font_and_burst_fan() {
     let c = draw_at(160, 45);
     assert!(has_braille(&c), "burst fan missing");
     assert!(c.contains("█ ▄ █"), "4-row logo W missing");
-    assert!(c.contains("▄  █"), "cpu hero '4' glyph missing"); // total_cpu 41 → "41%"
-    assert!(c.contains("█  ▄▀"), "hero '%' glyph missing");
+    assert!(c.contains("▚▄▌"), "cpu hero '4' glyph missing"); // total_cpu 41 → "41%"
+    assert!(c.contains("▞▗▖"), "hero '%' glyph missing");
 }
 
 #[test]

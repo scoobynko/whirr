@@ -82,7 +82,7 @@ mod tests {
     fn hero_drops_thermometer_when_room() {
         // demo temp = 88.0 → "88.0°C"
         let full = draw(40, 12);
-        assert!(full.contains("▄▀▀▄"), "4-row '8' glyph missing");
+        assert!(full.contains("▞▀▖ ▞▀▖    ▞▀▖ ▞▖ ▞▀▖"), "4-row hero row for \"88.0°C\" missing");
         assert!(!full.contains("▐"), "thermometer should be gone in hero tier");
         let compact = draw(40, 10);
         assert!(compact.contains("▐"), "thermometer missing in compact tier");
@@ -100,27 +100,34 @@ mod tests {
     #[test]
     fn hero_falls_back_to_coarse_when_precise_would_overflow() {
         // 30x12 -> inner 28x10, full hero tier engaged (width >= 28, height >= 9).
-        // "100.5°C" formatted to 1 decimal is 31 glyph-columns wide, wider than
-        // the 28-wide inner area, so it must fall back to "100°C" (0 decimals)
-        // instead of truncating mid-glyph. The precise-width row never fits
-        // inside 28 cols, so its top row is not a substring of the buffer;
-        // the coarse row (23 cols) does fit and must appear intact.
+        // The quadrant font is narrower than the old full-block face (3-col
+        // digits instead of 4), so a realistic 3-integer-digit reading like
+        // "100.5°C" (26 glyph-cols) now fits the 28-wide card and no longer
+        // exercises the fallback — at this card-width floor, no realistic
+        // sensor temperature (up to ~150°C) overflows any more. The guard
+        // still has to hold for garbage/corrupted sensor input, so drive it
+        // with a value no real Mac would report: "1000.4°C" formatted to 1
+        // decimal is 30 glyph-columns wide, wider than the 28-wide inner
+        // area, so it must fall back to "1000°C" (0 decimals) instead of
+        // truncating mid-glyph. The precise-width row never fits inside 28
+        // cols, so its top row is not a substring of the buffer; the coarse
+        // row (23 cols) does fit and must appear intact.
         let mut t = Terminal::new(TestBackend::new(30, 12)).unwrap();
         let mut app = App::demo();
-        app.medium.as_mut().unwrap().temp_c = Some(100.5);
+        app.medium.as_mut().unwrap().temp_c = Some(1000.4);
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let content: String =
             t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(!content.contains('?'), "hero glyph fallback '?' should never render");
-        let precise_row0 = super::font::big_text("100.5°C").remove(0);
-        let coarse_row0 = super::font::big_text("100°C").remove(0);
+        let precise_row0 = super::font::big_text("1000.4°C").remove(0);
+        let coarse_row0 = super::font::big_text("1000°C").remove(0);
         assert!(
             !content.contains(precise_row0.as_str()),
             "full-precision hero row rendered intact — should have overflowed the 28-wide card"
         );
         assert!(
             content.contains(coarse_row0.as_str()),
-            "coarse fallback row missing — hero should fall back to \"100°C\" when precise overflows"
+            "coarse fallback row missing — hero should fall back to \"1000°C\" when precise overflows"
         );
     }
 
