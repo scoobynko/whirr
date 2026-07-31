@@ -55,7 +55,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             // full line — percent, cycles and health — still fits the
             // narrowest full-tier card (inner width 28 at 120 cols); the
             // old wording clipped at widths at or below ~124.
-            let state = if b.charging { "⚡" } else { "🔋" };
+            // Geometric arrows, not emoji: colour emoji clash with the
+            // monochrome palette and render double-width, which shifted every
+            // following field by a cell. ↑/↓ are single-width and match the
+            // network card's directional vocabulary.
+            let state = if b.charging { "↑" } else { "↓" };
             let health = b.health_pct.map_or(String::new(), |h| format!(" · h{h}%"));
             format!("{state} {}% · {}cyc{health}", b.percent, b.cycles)
         }
@@ -113,10 +117,9 @@ mod tests {
         // (120/4=30 wide, inner 28): the old "cycles"/"health" wording
         // clipped at widths at or below ~124.
         let full = draw(30, 12);
-        // "⚡" renders as a double-width glyph (an extra cell reserved after
-        // it), hence the two spaces before "76%".
+        // "↑" is single-width, unlike the emoji this replaced — one space.
         assert!(
-            full.contains("⚡  76% · 120cyc · h97%"),
+            full.contains("↑ 76% · 120cyc · h97%"),
             "battery footer clipped or missing at inner width 28"
         );
     }
