@@ -26,12 +26,12 @@ use crate::app::{App, MAX_VISIBLE_PROCS};
 /// - **Width >= 120** (`three_cards`): the body splits into two rows —
 ///   processes (with network alongside it, if it fits) on top, and three
 ///   equal-width cards (localhost, claude sessions, others) in a variable-height
-///   row below. The card row uses constraints `Min(4)` (processes) and `Max(6)`
+///   row below. The card row uses constraints `Min(4)` (processes) and `Max(10)`
 ///   (cards): at 120×30 the body is 9 rows, minus 2 borders leaves 7 content rows,
 ///   so processes gets its 4-row floor and cards takes 5 (2 borders + 3 content),
 ///   giving each card 3 visible rows. At >=120×40 the body has room for both
-///   processes to grow past its floor and cards to reach their 6-row max
-///   (2 borders + 4 content). Splitting the three port/session groups into their
+///   processes to grow past its floor and cards to reach their 10-row max
+///   (2 borders + 8 content). Splitting the three port/session groups into their
 ///   own cards is only worth the width when each can show a useful number of rows;
 ///   below 120 columns they would be too cramped to read.
 /// - **Narrower**: the single-card `render_left_column` shape below, with the
@@ -99,8 +99,8 @@ pub fn draw(f: &mut Frame, app: &App) {
     let three_cards = area.width >= 120;
     if three_cards {
         // Row A holds processes and network; row B the three cards. Row B gets
-        // up to 6 (2 borders + 4 content rows), with Processes getting a floor of 4.
-        let rows = Layout::vertical([Constraint::Min(4), Constraint::Max(6)]).split(body);
+        // up to 10 (2 borders + 8 content rows), with Processes getting a floor of 4.
+        let rows = Layout::vertical([Constraint::Min(4), Constraint::Max(10)]).split(body);
         if show_network {
             let cols = Layout::horizontal([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
                 .split(rows[0]);

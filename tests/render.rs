@@ -93,12 +93,12 @@ fn stock_80x24_fits_without_starving_header_or_ports() {
 // so the old single-Ports-card body split (Max(13)/Min(4)) can no longer
 // coexist with the full-tier header/gauges (which also require width>=120)
 // — that scenario the pre-three-cards suite exercised here no longer
-// exists. What replaces it: the three-card row is `Length(6)` (4 content
+// exists. What replaces it: the three-card row is `Max(10)` (up to 8 content
 // rows) when the body has room, but shrinks below that at tight heights
-// (120x30 gets only 2 — see the three-card layout tests below). At a
-// generous body height all four of `demo()`'s sessions should fit, proving
-// the row actually reached its full 4 content rows rather than staying
-// shrunk to the 120x30 case's 2.
+// (120x30 is floor-bound by Processes' Min(4) and gets only 3 — see the
+// three-card layout tests below). At a generous body height all four of
+// `demo()`'s sessions should fit, proving the row actually reached its full
+// 8 content rows rather than staying shrunk to the 120x30 case's 3.
 #[test]
 fn large_size_gives_the_three_card_row_its_full_height() {
     let c = draw_at(160, 45);
@@ -195,8 +195,9 @@ fn card_band_dimensions(w: u16, h: u16) -> (usize, usize) {
 
 #[test]
 fn card_band_has_adequate_space_at_120x30() {
-    // At 120x30 with full tier (header 9 + gauges 12), body gets 9 rows.
-    // The card band should get enough room to show 3 content rows.
+    // At 120x30 with full tier (header 9 + gauges 12), body gets only 9 rows,
+    // so the split is floor-bound: Processes claims its Min(4) floor and the
+    // card band gets whatever's left, regardless of the Max(10) cap.
     let (total, content) = card_band_dimensions(120, 30);
     eprintln!("120x30: card band total={} rows, content={} rows", total, content);
     assert_eq!(total, 5, "At 120x30 card band should be 5 rows total");
@@ -205,11 +206,11 @@ fn card_band_has_adequate_space_at_120x30() {
 
 #[test]
 fn card_band_reaches_full_height_at_160x45() {
-    // At larger sizes, the card band should get its full 4 content rows.
+    // At larger sizes, the card band should reach its full Max(10) cap: 8 content rows.
     let (total, content) = card_band_dimensions(160, 45);
     eprintln!("160x45: card band total={} rows, content={} rows", total, content);
-    assert_eq!(total, 6, "At 160x45 card band should be 6 rows total");
-    assert_eq!(content, 4, "At 160x45 card band should have 4 content rows");
+    assert_eq!(total, 10, "At 160x45 card band should be 10 rows total");
+    assert_eq!(content, 8, "At 160x45 card band should have 8 content rows");
 }
 
 #[test]
@@ -217,8 +218,8 @@ fn card_band_at_120x40() {
     // At 120x40, measure the card band height for comprehensive coverage.
     let (total, content) = card_band_dimensions(120, 40);
     eprintln!("120x40: card band total={} rows, content={} rows", total, content);
-    assert_eq!(total, 6, "At 120x40 card band should be 6 rows total");
-    assert_eq!(content, 4, "At 120x40 card band should have 4 content rows");
+    assert_eq!(total, 10, "At 120x40 card band should be 10 rows total");
+    assert_eq!(content, 8, "At 120x40 card band should have 8 content rows");
 }
 
 #[test]
