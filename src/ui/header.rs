@@ -13,13 +13,16 @@ const LOGO: [&str; 3] = [
     "▀▄▀▄▀ █ █ █ █ █ █ █",
 ];
 
-// Full-tier wordmark: W H I R R in the same 4-row tall-rounded style as
-// the hero font (ui/font.rs).
+// Full-tier wordmark: W H I R R in the same 4-row quadrant style as the hero
+// font (ui/font.rs), transcribed from FIGlet `smblock`, with a space between
+// letters — kerned tight (14 cols) the strokes run together at this weight.
+// The compact tier keeps its own 3-row wordmark below: this face is 4 rows and
+// the compact header band is only 3.
 const LOGO4: [&str; 4] = [
-    "█   █ █  █ ▄█▄ █▀▀▄ █▀▀▄",
-    "█   █ █▄▄█  █  █▄▄▀ █▄▄▀",
-    "█ ▄ █ █  █  █  █ ▀▄ █ ▀▄",
-    "▀▄▀▄▀ █  █ ▄█▄ █  █ █  █",
+    "▌ ▌ ▌ ▌ ▜▘ ▛▀▖ ▛▀▖",
+    "▌▖▌ ▙▄▌ ▐  ▙▄▘ ▙▄▘",
+    "▙▚▌ ▌ ▌ ▐  ▌▚  ▌▚ ",
+    "▘ ▘ ▘ ▘ ▀▘ ▘ ▘ ▘ ▘",
 ];
 
 // Compact-tier 2-arm fan (4 frames) — kept verbatim.
