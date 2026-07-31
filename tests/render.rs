@@ -188,30 +188,45 @@ fn compact_tier_keeps_old_visuals() {
     assert!(c.contains("88.0°C"), "compact temp readout missing");
 }
 
-/// Measure the actual height of the card band at different terminal sizes.
-/// Returns (card_band_total_height, content_rows) where content_rows = total - 2 borders.
-fn card_band_dimensions(w: u16, h: u16) -> (usize, usize) {
+/// Measure the actual height of both the processes and card bands at different terminal sizes.
+/// Returns (processes_band_height, card_band_total_height, card_band_content_rows).
+fn band_dimensions(w: u16, h: u16) -> (usize, usize, usize) {
     let lines = draw_grid(w, h);
 
-    // Find the row where the card band starts (title row of localhost)
-    let start_row = match lines.iter().position(|l| l.contains("localhost")) {
+    // Find the row where the processes band starts (title row of Processes)
+    let processes_start = match lines.iter().position(|l| l.contains("Processes")) {
         Some(r) => r,
-        None => return (0, 0),
+        None => return (0, 0, 0),
     };
 
+    // Find the row where the card band starts (title row of localhost)
+    let card_start = match lines.iter().position(|l| l.contains("localhost")) {
+        Some(r) => r,
+        None => return (0, 0, 0),
+    };
+
+    let processes_band_height = card_start - processes_start;
+
     // Find the row where the card band ends (last border line before next section or terminal end)
-    let mut end_row = start_row;
-    for (i, line) in lines.iter().enumerate().skip(start_row + 1) {
+    let mut card_end = card_start;
+    for (i, line) in lines.iter().enumerate().skip(card_start + 1) {
         // Stop when we hit a line that looks like the bottom border of the cards
         if line.contains("╯") || line.contains("┘") || i == lines.len() - 1 {
-            end_row = i;
+            card_end = i;
             break;
         }
     }
 
-    let total_height = end_row - start_row + 1;
-    let content_rows = total_height.saturating_sub(2); // subtract top and bottom borders
-    (total_height, content_rows)
+    let card_total_height = card_end - card_start + 1;
+    let card_content_rows = card_total_height.saturating_sub(2); // subtract top and bottom borders
+    (processes_band_height, card_total_height, card_content_rows)
+}
+
+/// Measure the actual height of the card band at different terminal sizes.
+/// Returns (card_band_total_height, content_rows) where content_rows = total - 2 borders.
+fn card_band_dimensions(w: u16, h: u16) -> (usize, usize) {
+    let (_, total, content) = band_dimensions(w, h);
+    (total, content)
 }
 
 #[test]
@@ -219,15 +234,13 @@ fn card_band_has_adequate_space_at_120x30() {
     // At 120x30 with full tier (header 9 + gauges 12) and one row now taken
     // off the bottom of the whole screen for the global keybind footer,
     // body gets only 8 rows (was 9 before the footer existed), so the split
-    // is floor-bound: Processes claims its Min(4) floor and the card band
-    // gets whatever's left, regardless of the Max(10) cap. That leaves the
-    // card band only 2 content rows here (was 3) — the tightest size this
-    // app supports absorbs the footer's row entirely as a real, visible
-    // regression rather than the constraints quietly hiding it.
+    // is floor-bound: Processes claims its Min(3) floor (1 header + 1 footer + 1 content)
+    // and the card band gets whatever's left (5 rows = 2 borders + 3 content).
+    // This recovers the 3-content-row target the user had asked for the card band.
     let (total, content) = card_band_dimensions(120, 30);
     eprintln!("120x30: card band total={} rows, content={} rows", total, content);
-    assert_eq!(total, 4, "At 120x30 card band should be 4 rows total");
-    assert_eq!(content, 2, "At 120x30 card band should have 2 content rows");
+    assert_eq!(total, 5, "At 120x30 card band should be 5 rows total");
+    assert_eq!(content, 3, "At 120x30 card band should have 3 content rows");
 }
 
 #[test]
