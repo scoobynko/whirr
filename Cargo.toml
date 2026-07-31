@@ -1,9 +1,17 @@
 [package]
 name = "whirr"
-version = "0.1.0"
+version = "0.3.0"
 edition = "2021"
 description = "A whirring macOS system dashboard for your terminal"
 license = "MIT"
+repository = "https://github.com/scoobynko/whirr"
+homepage = "https://github.com/scoobynko/whirr"
+readme = "README.md"
+keywords = ["macos", "tui", "system-monitor", "dashboard", "terminal"]
+categories = ["command-line-utilities", "os::macos-apis"]
+# Design and plan documents live beside the code but must not ship inside the
+# published crate — they are ~2.9k lines and of no use to a consumer.
+exclude = ["docs/", ".superpowers/", ".claude/", ".github/"]
 
 [dependencies]
 ratatui = "0.29"
@@ -15,3 +23,11 @@ libc = "0.2"
 [profile.release]
 lto = true
 strip = true
+
+# The profile that 'dist' will build with. `dist init` writes `lto = "thin"`
+# here by default, which would quietly downgrade the `lto = true` (fat) that
+# [profile.release] above already asks for — the released binary would be
+# built to weaker settings than a local `cargo build --release`. Inherit
+# instead: CI build time is not worth a larger, slower artifact.
+[profile.dist]
+inherits = "release"

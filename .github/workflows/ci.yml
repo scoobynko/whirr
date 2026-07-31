@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# A superseded run has nothing to say; cancel it rather than pay for it.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    name: test + clippy
+    # Apple Silicon: whirr reads IOKit/IOReport and `mac/ioreport.rs` expects
+    # the Energy Model group, which only exists on Apple hardware. The tests
+    # are not pure units — several read this machine's real sensors — so they
+    # need a genuine arm64 macOS runner, not just a macOS-targeted build.
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      # `-D warnings` is the enforced gate for this repo; `cargo fmt --check`
+      # deliberately is not, because the codebase is hand-formatted.
+      - name: clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: test
+        run: cargo test --all-targets
+
+      # The Homebrew formula's `test do` block runs `whirr --version`. If that
+      # ever stops working the break should surface here, not in a user's
+      # `brew install`.
+      - name: release binary answers --version and --help
+        run: |
+          cargo build --release
+          ./target/release/whirr --version
+          ./target/release/whirr --help
+
+      # crates.io rejects a crate missing metadata, and packaging problems
+      # (a bad `exclude`, a missing README) otherwise only surface during the
+      # release itself, when it is too late to fix quietly.
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run

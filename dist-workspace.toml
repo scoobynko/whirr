@@ -1,0 +1,31 @@
+[workspace]
+members = ["cargo:."]
+
+# Config for 'dist'
+[dist]
+# The preferred dist version to use in CI (Cargo.toml SemVer syntax)
+cargo-dist-version = "0.32.0"
+# CI backends to support
+ci = "github"
+# The installers to generate for each app
+installers = ["shell", "homebrew"]
+# Apple Silicon only. This is forced by the code, not by preference:
+# `src/mac/ioreport.rs` expects the IOReport "Energy Model" group, which does
+# not exist on Intel Macs — an Intel user gets a panic, not a message. Shipping
+# an x86_64 build would mean shipping something that crashes on launch. The
+# generated formula gates on arm64 so `brew` refuses cleanly instead.
+targets = ["aarch64-apple-darwin"]
+# Path that installers should place binaries in
+install-path = "CARGO_HOME"
+# Where to host releases
+hosting = "github"
+# Whether to install an updater program
+install-updater = false
+# The tap the generated formula is committed to. Matches the existing
+# `homebrew-welchost` naming, so the install path is
+# `brew install scoobynko/whirr/whirr`.
+tap = "scoobynko/homebrew-whirr"
+# Without this the formula is generated but never pushed anywhere — dist says
+# "Homebrew packages will not be automatically published" and the tap stays
+# empty, which is the same silent half-release as the token problem.
+publish-jobs = ["homebrew"]

@@ -1,0 +1,38 @@
+[workspace]
+# The release PR is the only manual step in the pipeline: merging it is what
+# tags the version and publishes it.
+pr_draft = false
+# whirr is a binary people install, not a library people depend on. Its git
+# tags are what cargo-dist keys off, so they must exist even for a release
+# that (for any reason) does not reach crates.io.
+git_release_enable = false
+# cargo-dist owns the GitHub Release: it attaches the binary tarball and
+# checksums to it. If release-plz created the release first, dist would find
+# it already present. Tag only, and let dist do the rest.
+
+[[package]]
+name = "whirr"
+# Design and plan docs are excluded from the crate but still live in the repo;
+# a change to one of them should not look like a code change in the changelog.
+changelog_update = true
+publish = true
+
+[changelog]
+# Conventional-commit history already exists (53 commits' worth), so the
+# generated changelog is real rather than a stub.
+protect_breaking_commits = true
+sort_commits = "oldest"
+
+commit_parsers = [
+  { message = "^feat", group = "Added" },
+  { message = "^fix", group = "Fixed" },
+  { message = "^perf", group = "Performance" },
+  { message = "^refactor", group = "Changed" },
+  { message = "^docs", group = "Documentation" },
+  # Housekeeping that a user of the tool has no reason to read.
+  { message = "^test", skip = true },
+  { message = "^chore", skip = true },
+  { message = "^ci", skip = true },
+  { message = "^build", skip = true },
+  { message = "^Merge", skip = true },
+]
