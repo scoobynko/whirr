@@ -16,10 +16,14 @@ env:
 jobs:
   test:
     name: test + clippy
-    # Apple Silicon: whirr reads IOKit/IOReport and `mac/ioreport.rs` expects
-    # the Energy Model group, which only exists on Apple hardware. The tests
-    # are not pure units — several read this machine's real sensors — so they
-    # need a genuine arm64 macOS runner, not just a macOS-targeted build.
+    # arm64 macOS, because that is the only target whirr builds for.
+    #
+    # Note that this runner is a *virtualised* Apple Silicon host: it compiles
+    # and runs everything, but exposes no HID temperature sensors, no IOReport
+    # "Energy Model" group, and no `hw.perflevel*` core counts. The three tests
+    # that read those skip themselves here (see `mac::needs_real_hardware`) and
+    # stay strict on a real Mac. Anything sensor-related therefore needs a
+    # local run to be genuinely covered.
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4

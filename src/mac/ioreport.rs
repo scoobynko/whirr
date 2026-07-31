@@ -199,6 +199,7 @@ impl PowerSampler {
 mod tests {
     #[test]
     fn power_sampler_returns_plausible_watts() {
+        crate::mac::needs_real_hardware!();
         let mut p =
             super::PowerSampler::new().expect("Energy Model group must exist on Apple Silicon");
         assert!(p.sample().is_none()); // first call primes
