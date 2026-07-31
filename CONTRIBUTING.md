@@ -3,21 +3,61 @@
 ## Commits
 
 Commit messages follow [conventional commits](https://www.conventionalcommits.org).
-This is not a style preference — `release-plz` reads them to decide the next
-version number and to write `CHANGELOG.md`, so the prefix you choose has a
-direct effect on what ships:
+This is not a style preference — it is the input to the release.
 
-| Prefix | Version bump | Appears in the changelog as |
+### How the version number is decided
+
+**From the commit messages, not from branch names.** Branch names are never
+consulted by anything in the pipeline.
+
+When `release-plz` runs, it collects every commit since the last git tag, reads
+each one's prefix, takes the **largest** bump any single commit asks for, and
+applies it to the current version in `Cargo.toml`:
+
+| Prefix | Bump | Changelog section |
 |---|---|---|
-| `feat:` | minor | Added |
-| `fix:` | patch | Fixed |
+| `feat:` | **minor** — `0.3.0` → `0.4.0` | Added |
+| `fix:` | patch — `0.3.0` → `0.3.1` | Fixed |
 | `perf:` | patch | Performance |
 | `refactor:` | patch | Changed |
 | `docs:` | patch | Documentation |
-| `test:`, `chore:`, `ci:`, `build:` | none | *(hidden)* |
+| `test:` `chore:` `ci:` `build:` `style:` `revert:` | none | *(hidden)* |
+| any of the above with `!`, e.g. `feat!:` | **major** — `0.3.0` → `1.0.0` | Added, flagged breaking |
+| a `BREAKING CHANGE:` footer in the body | **major** | as above |
 
-A `!` after the prefix (`feat!:`) or a `BREAKING CHANGE:` trailer forces a
-major bump.
+So a batch of ten `fix:` commits is still one patch bump, and a single `feat:`
+among them makes it a minor. A release containing only `chore:`/`ci:` commits
+proposes no release at all.
+
+The full grammar is `type(optional-scope)!: subject`, e.g.
+`fix(ports): keep the selection visible`. Scope is free-form and affects
+nothing but readability.
+
+### Why this is enforced rather than suggested
+
+A message release-plz cannot parse is **silently ignored**: it contributes
+nothing to the version bump and never appears in the changelog. Nothing errors.
+`Fixed the ports card` looks like a fix and counts for nothing.
+
+Two guards, deliberately unequal:
+
+- **`scripts/commit-msg-lint.sh`**, run by the `commits` job on every PR. This
+  is the gate — it cannot be skipped.
+- **`.githooks/commit-msg`**, the same script as a local hook, so you find out
+  before pushing rather than after. Opt in once per clone:
+
+  ```bash
+  git config core.hooksPath .githooks
+  ```
+
+  Advisory only: `git commit --no-verify` skips it, and it only exists for
+  whoever enabled it. That is why CI runs the check too.
+
+To see what a message would do before committing:
+
+```bash
+./scripts/commit-msg-lint.sh -m "feat: your subject here"
+```
 
 ## Checks
 

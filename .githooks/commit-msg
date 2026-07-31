@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+#
+# Reject a commit message release-plz could not parse, before it is written.
+#
+# Enable once per clone:
+#     git config core.hooksPath .githooks
+#
+# This is a convenience, not a gate: it only runs for whoever enabled it, and
+# `git commit --no-verify` skips it. The enforced check is the `commits` job in
+# .github/workflows/ci.yml, which runs on every PR and cannot be skipped.
+exec "$(dirname "$0")/../scripts/commit-msg-lint.sh" "$1"

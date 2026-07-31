@@ -14,6 +14,37 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Runs before the expensive job: a malformed prefix is worth knowing about
+  # in seconds, and this needs no toolchain.
+  commits:
+    name: commit messages
+    # Only meaningful on a PR, where there is a base to diff against. A push to
+    # main has already been through this.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # release-plz derives the version bump and the whole changelog from these
+      # prefixes, so a message it cannot parse is dropped from both silently.
+      # The same script backs the optional local hook (.githooks/commit-msg),
+      # so the two cannot disagree about what is valid.
+      - name: every commit in this PR is a conventional commit
+        run: |
+          base="origin/${{ github.base_ref }}"
+          git fetch --quiet origin "${{ github.base_ref }}"
+          failed=0
+          while IFS= read -r sha; do
+            msg=$(git log -1 --format=%B "$sha")
+            if ! ./scripts/commit-msg-lint.sh -m "$msg"; then
+              echo "  ...in commit $(git log -1 --format='%h' "$sha")" >&2
+              failed=1
+            fi
+          done < <(git rev-list "$base"..HEAD)
+          exit $failed
+
   test:
     name: test + clippy
     # arm64 macOS, because that is the only target whirr builds for.
