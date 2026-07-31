@@ -13,7 +13,7 @@ pub mod temp;
 pub mod theme;
 
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Block, Paragraph};
 
 use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
 
@@ -61,6 +61,12 @@ use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
 /// header (3 rows) and compact gauges (10 rows).
 pub fn draw(f: &mut Frame, app: &App) {
     let area = f.area();
+    // Paint the whole frame with the near-black base first, before anything
+    // else renders, so every widget composites on top of it. A borderless
+    // Block fills its full area's background via Buffer::set_style, which
+    // only patches the bg channel — later fg-only styles (most widgets here)
+    // leave this bg untouched.
+    f.render_widget(Block::default().style(Style::default().bg(theme::BASE)), area);
     let show_ports = area.height >= 20;
     let show_network = area.height >= 16;
     let show_power = area.width >= 70;

@@ -2,6 +2,7 @@ use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use whirr::app::{App, Focus};
 use whirr::ui;
+use whirr::ui::theme;
 
 fn draw_at(w: u16, h: u16) -> String {
     let app = App::demo();
@@ -43,6 +44,47 @@ fn draw_grid_app(app: &App, w: u16, h: u16) -> Vec<String> {
 /// that's the row its title (and top border) is drawn on.
 fn row_of(lines: &[String], needle: &str) -> usize {
     lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle:?} not found"))
+}
+
+/// The frame paints `theme::BASE` across itself before anything else
+/// renders, so a widget that only sets a foreground (borders, titles, plain
+/// text — the vast majority of the UI) must still composite on a `BASE`
+/// background rather than the terminal's default. Sampled at a genuinely
+/// empty patch of screen, on a card's border, and on plain body text inside
+/// a card, at a size large enough for every panel to be present.
+#[test]
+fn frame_background_is_base_at_sampled_positions() {
+    let app = App::demo();
+    let mut terminal = Terminal::new(TestBackend::new(160, 45)).unwrap();
+    terminal.draw(|f| ui::draw(f, &app)).unwrap();
+    let buf = terminal.backend().buffer().clone();
+
+    // Top-left corner: outside every panel, genuinely empty screen space.
+    assert_eq!(buf[(0, 0)].bg, theme::BASE, "empty top-left corner should carry the base background");
+
+    let lines: Vec<String> = (0..buf.area.height)
+        .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
+        .collect();
+
+    // A card's border cell: panel_block's border_style sets only `fg`, so
+    // the border row's leftmost drawn character (its corner) must still
+    // carry the base background underneath.
+    let cpu_row = lines.iter().position(|l| l.contains("CPU")).expect("CPU card present");
+    let border_x = lines[cpu_row].find(|c: char| c != ' ').expect("border corner present on CPU's title row");
+    assert_eq!(
+        buf[(border_x as u16, cpu_row as u16)].bg, theme::BASE,
+        "CPU card's border cell should keep the base background under its fg-only border style"
+    );
+
+    // Plain body text inside a card (a non-selected process row): the
+    // process table only sets `bg` on its selected row, so a different row's
+    // fg-only text must still keep the base background.
+    let processes_row = lines.iter().position(|l| l.contains("Processes")).expect("Processes card present");
+    let body_y = (processes_row + 2) as u16; // row 0 (title+1) is index 0, the default-selected row
+    assert_eq!(
+        buf[(2, body_y)].bg, theme::BASE,
+        "plain process row text should keep the base background, not Reset"
+    );
 }
 
 #[test]

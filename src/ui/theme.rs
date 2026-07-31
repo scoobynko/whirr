@@ -9,7 +9,8 @@ pub const RED: Color = Color::Rgb(255, 92, 87);
 pub const GREEN: Color = Color::Rgb(74, 214, 109);
 pub const TEXT: Color = Color::Rgb(205, 214, 217);
 pub const DIM: Color = Color::Rgb(90, 105, 110);         // borders, labels
-pub const BG_CELL: Color = Color::Rgb(18, 32, 36);       // empty heatmap cell
+pub const BG_CELL: Color = Color::Rgb(18, 32, 36);       // empty heatmap cell (used as a *foreground* for text-on-accent, e.g. selected rows — do not repurpose)
+pub const BASE: Color = Color::Rgb(10, 14, 18);          // near-black frame background, slight cool cast
 
 const GRAD_FROM: (u8, u8, u8) = (14, 58, 58); // dark teal
 const GRAD_TO: (u8, u8, u8) = (45, 225, 194);
