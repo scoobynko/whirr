@@ -15,20 +15,9 @@ impl<T: Copy> History<T> {
         }
         self.buf.push_back(v);
     }
-    pub fn latest(&self) -> Option<T> {
-        self.buf.back().copied()
-    }
+    /// Oldest to newest — the order every chart in `ui` draws in.
     pub fn iter(&self) -> impl Iterator<Item = T> + '_ {
         self.buf.iter().copied()
-    }
-    pub fn len(&self) -> usize {
-        self.buf.len()
-    }
-    pub fn cap(&self) -> usize {
-        self.cap
-    }
-    pub fn is_empty(&self) -> bool {
-        self.buf.is_empty()
     }
 }
 
@@ -42,15 +31,12 @@ mod tests {
         for v in [1, 2, 3, 4, 5] {
             h.push(v);
         }
-        assert_eq!(h.iter().collect::<Vec<_>>(), vec![3, 4, 5]);
-        assert_eq!(h.latest(), Some(5));
-        assert_eq!(h.len(), 3);
+        assert_eq!(h.iter().collect::<Vec<_>>(), vec![3, 4, 5], "oldest first, capped at cap");
     }
 
     #[test]
     fn empty() {
         let h: History<f32> = History::new(4);
-        assert_eq!(h.latest(), None);
         assert_eq!(h.iter().count(), 0);
     }
 }

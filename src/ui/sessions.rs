@@ -24,7 +24,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     }
 
     let visible = inner.height as usize;
-    let offset = if focused { app.selected.saturating_sub(visible.saturating_sub(1)) } else { 0 };
+    let cursor = focused.then(|| app.selected());
+    let offset = super::scroll::offset(visible, cursor);
 
     // tty and CPU are fixed-width; the project takes what is left. Reserve them
     // first so a long project name cannot push them off the edge.
@@ -38,7 +39,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .skip(offset)
         .take(visible)
         .map(|(i, s)| {
-            let selected = focused && i == app.selected;
+            let selected = cursor == Some(i);
             let base = if selected {
                 Style::default().fg(theme::BG_CELL).bg(theme::ACCENT)
             } else {
@@ -50,7 +51,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 None => format!("{:>w$}", "—", w = CPU_W),
             };
             Line::from(vec![
-                Span::styled(format!(" {:<w$}", super::ports::trunc(&s.project, label_w), w = label_w), base),
+                Span::styled(format!(" {:<w$}", super::text::trunc(&s.project, label_w), w = label_w), base),
                 Span::styled(
                     format!("{:<w$}", s.tty.as_deref().unwrap_or("—"), w = TTY_W),
                     if selected { base } else { Style::default().fg(theme::DIM) },

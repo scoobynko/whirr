@@ -2,40 +2,38 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use super::{font, theme};
+use super::{font, gauge, theme};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = theme::panel_block("Power", false);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
+    let inner = gauge::frame(f, area, "Power");
     let Some(m) = app.medium.as_ref() else {
-        f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), inner);
-        return;
+        return gauge::unavailable(f, inner);
     };
 
-    let hero = font::hero_fits(inner);
-    let rows = Layout::vertical([
-        Constraint::Length(if hero { 5 } else { 1 }), // hero
-        Constraint::Length(1),                         // cpu/gpu/ane legend
-        Constraint::Min(2),                            // total sparkline
-        Constraint::Length(1),                         // battery footer
-    ])
-    .split(inner);
+    // The battery footer comes off the bottom first: it is the one row that
+    // renders whether or not the power sensors answered, so reserving it here
+    // means the rest of the card can be laid out for the data it actually has,
+    // rather than into a four-row split built for readings that may not exist.
+    let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(inner);
+    let (body, footer) = (split[0], split[1]);
 
     match &m.power {
         Some(p) => {
+            let hero = font::hero_fits(inner);
+            let head = if hero { gauge::HERO_ROWS } else { 1 };
+            let rows = Layout::vertical([
+                Constraint::Length(head),
+                Constraint::Length(1), // cpu/gpu/ane legend
+                Constraint::Min(2),    // total sparkline
+            ])
+            .split(body);
+
             let total = p.cpu_w + p.gpu_w + p.ane_w;
             let text = format!("{total:.1} W");
             if hero {
-                let coarse = format!("{total:.0} W");
-                let lines = font::hero_lines(&text, &coarse, inner.width, theme::ACCENT);
-                f.render_widget(Paragraph::new(lines), rows[0]);
+                gauge::hero(f, rows[0], &text, &format!("{total:.0} W"), theme::ACCENT);
             } else {
-                f.render_widget(
-                    Paragraph::new(Span::styled(text, Style::default().fg(theme::ACCENT).bold())),
-                    rows[0],
-                );
+                gauge::readout(f, rows[0], &text, theme::ACCENT);
             }
             let legend = format!("cpu {:.1} · gpu {:.1} · ane {:.1}", p.cpu_w, p.gpu_w, p.ane_w);
             f.render_widget(
@@ -44,9 +42,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             );
             render_spark(f, rows[2], app);
         }
-        None => {
-            f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), rows[0]);
-        }
+        None => gauge::unavailable(f, body),
     }
 
     let battery_line = match &m.battery {
@@ -67,7 +63,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
     f.render_widget(
         Paragraph::new(battery_line).style(Style::default().fg(theme::DIM)),
-        rows[3],
+        footer,
     );
 }
 

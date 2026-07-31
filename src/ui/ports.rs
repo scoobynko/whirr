@@ -3,6 +3,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Focus};
 use crate::sampler::ports::{PortGroup, PortRow};
+use super::text::{pad, trunc, width as disp_width};
 use super::theme;
 
 /// Fixed field widths shared by the width budgeting below. `LABEL_WIDTH` is
@@ -13,44 +14,57 @@ const LABEL_WIDTH: usize = 20;
 const CPU_WIDTH: usize = 6;
 const CLAUDE_PORT_PREFIX_WIDTH: usize = 8;
 
-/// Terminal display width (cells), not char count — a CJK character costs 2
-/// cells, so counting chars overstates how much room is actually left and
-/// lets the real terminal clip content a width-aware budget thought was
-/// safe. Ratatui already computes this internally; reuse it instead of
-/// pulling in a new dependency.
-fn disp_width(s: &str) -> usize {
-    Span::from(s).width()
+/// Which port rows a card carries.
+///
+/// `Localhost` and `Others` are two of the three side-by-side cards wide
+/// terminals get; `Combined` is the single card narrower ones get instead,
+/// carrying all three groups at once.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Card {
+    Localhost,
+    Others,
+    Combined,
 }
 
-/// Right-pad `s` with spaces to `width` display cells. `s` must already fit
-/// within `width` (e.g. via `trunc`) — this only grows short strings, it
-/// never clips.
-fn pad_to_width(s: &str, width: usize) -> String {
-    let w = disp_width(s);
-    if w >= width {
-        s.to_string()
-    } else {
-        format!("{s}{}", " ".repeat(width - w))
-    }
-}
-
-/// Clip to `max` display cells without splitting a char or a wide glyph.
-pub(crate) fn trunc(s: &str, max: usize) -> String {
-    if disp_width(s) <= max {
-        return s.to_string();
-    }
-    let budget = max.saturating_sub(1);
-    let mut out = String::new();
-    for ch in s.chars() {
-        let mut candidate = out.clone();
-        candidate.push(ch);
-        if disp_width(&candidate) > budget {
-            break;
+impl Card {
+    fn title(self) -> &'static str {
+        match self {
+            Card::Localhost => "localhost",
+            Card::Others => "others",
+            Card::Combined => "Ports",
         }
-        out = candidate;
     }
-    out.push('…');
-    out
+
+    /// The focus whose cursor selects in this card.
+    ///
+    /// `Combined` answers to `Focus::Localhost` because those are the only
+    /// rows it lets you select: the claude rows it displays are listening
+    /// sockets, a different list from the process-sourced one
+    /// `Focus::Sessions` addresses, and system agents are deliberately not
+    /// actionable (`App::on_key` applies the same rule to `k`).
+    fn focus(self) -> Focus {
+        match self {
+            Card::Localhost | Card::Combined => Focus::Localhost,
+            Card::Others => Focus::Others,
+        }
+    }
+
+    fn rows(self, app: &App) -> Vec<&PortRow> {
+        match self {
+            Card::Localhost => app.localhost_rows(),
+            Card::Others => app.other_rows(),
+            Card::Combined => {
+                app.slow.as_ref().map(|s| s.rows.iter().collect()).unwrap_or_default()
+            }
+        }
+    }
+
+    /// Whether rows need to carry their group. Only the combined card holds
+    /// more than one group; the single-group cards are labelled by their own
+    /// title, so a marker or header there would just be noise.
+    fn labels_groups(self) -> bool {
+        self == Card::Combined
+    }
 }
 
 /// Join `ports` as `:NNNN` tokens, never severing a number mid-digit. If they
@@ -104,22 +118,16 @@ fn range_cost(rows: &[&PortRow], start: usize, end: usize, headers: bool) -> usi
     cost
 }
 
-/// Shared row renderer. `rows` is already filtered and ordered; `combined`
-/// indicates whether the card holds multiple groups (only then do headers
-/// and group markers make sense); `headers` controls whether group header
-/// lines are emitted (combined cards with enough height use them).
-#[allow(clippy::too_many_arguments)]
-fn render_rows(
-    f: &mut Frame,
-    area: Rect,
-    app: &App,
-    title: &str,
-    focused: bool,
-    rows: &[&PortRow],
-    combined: bool,
-    headers: bool,
-) {
+/// Render one ports card. Everything that used to be threaded through as a
+/// pile of parameters — title, row set, which focus selects here, whether
+/// rows carry their group — is a property of `card`.
+pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
+    let rows = card.rows(app);
+    let rows = &rows[..];
+    let focused = app.focus == card.focus();
+
     let stale = app.slow.as_ref().is_some_and(|s| s.stale);
+    let title = card.title();
     let full_title = if stale { format!("{title} ⟳ stale") } else { title.to_string() };
     let block = theme::panel_block(&full_title, focused);
     let inner = block.inner(area);
@@ -137,33 +145,19 @@ fn render_rows(
         return;
     }
 
-    // Headers cost a row each, which the compact tier cannot spare; there it
-    // uses a per-row marker instead. 8 rows of inner height is the threshold —
-    // below that, the 80x24 layout gives this card only two content rows.
-    // Headers only apply to combined cards; single-group cards have a title.
-    let headers = combined && headers && inner.height >= 8;
+    // A group can be carried by a header line or by a per-row marker. Headers
+    // read better but cost a row each, which the compact tier cannot spare —
+    // 8 rows of inner height is the threshold, below which the 80x24 layout
+    // gives this card only two content rows.
+    let headers = card.labels_groups() && inner.height >= 8;
+    let markers = card.labels_groups() && !headers;
     let visible_rows = inner.height as usize;
-    // The offset search's loop condition `range_cost(offset..=selected, headers) > visible_rows`
-    // only ever terminates because a single selected row plus its own header is guaranteed to
-    // fit the budget — otherwise `offset` could walk right past `selected` looking for a window
-    // that will never exist. Pin that invariant directly instead of the two inputs it's derived
-    // from (which can never disagree with each other, so asserting their relationship proves
-    // nothing about the search).
-    debug_assert!(
-        rows.is_empty()
-            || range_cost(rows, app.selected.min(rows.len() - 1), app.selected.min(rows.len() - 1), headers)
-                <= visible_rows
-    );
-    let offset = if focused {
-        let selected = app.selected.min(rows.len().saturating_sub(1));
-        let mut offset = 0;
-        while offset < selected && range_cost(rows, offset, selected, headers) > visible_rows {
-            offset += 1;
-        }
-        offset
-    } else {
-        0
-    };
+    let cursor = focused.then(|| app.selected());
+    // Rows here are not all one line tall — each group header costs an extra
+    // line — so how far to scroll can't be computed from indices alone.
+    let offset = super::scroll::offset_while(cursor, |from| {
+        range_cost(rows, from, cursor.expect("only called when focused"), headers) <= visible_rows
+    });
 
     let mut lines: Vec<Line> = Vec::new();
     let mut last_group: Option<PortGroup> = None;
@@ -185,7 +179,7 @@ fn render_rows(
                 break;
             }
         }
-        let selected = focused && i == app.selected;
+        let selected = cursor == Some(i);
         let base = if selected {
             Style::default().fg(theme::BG_CELL).bg(theme::ACCENT)
         } else {
@@ -193,9 +187,8 @@ fn render_rows(
         };
         let mut spans: Vec<Span> = Vec::new();
         let mut prefix_width = 0usize;
-        if combined && !headers {
-            // Marker carries the group when there is no header to do it.
-            // Only shown in combined cards; single-group cards use their title instead.
+        if markers {
+            // The marker carries the group when there is no header to do it.
             let (glyph, colour) = match r.group {
                 PortGroup::Localhost => ("●", theme::ACCENT),
                 PortGroup::Claude => ("○", theme::TEXT),
@@ -228,7 +221,7 @@ fn render_rows(
                     spans.push(Span::styled(format!(" :{:<6}", r.ports[0]), base.bold()));
                 }
                 spans.push(Span::styled(
-                    format!(" {}", pad_to_width(&trunc(&r.label, LABEL_WIDTH), LABEL_WIDTH)),
+                    format!(" {}", pad(&trunc(&r.label, LABEL_WIDTH), LABEL_WIDTH)),
                     base,
                 ));
                 if show_cpu {
@@ -252,7 +245,7 @@ fn render_rows(
                 let truncated_label = trunc(&r.label, label_width);
                 let label_was_truncated = truncated_label.ends_with('…');
                 spans.push(Span::styled(
-                    format!(" {}", pad_to_width(&truncated_label, label_width)),
+                    format!(" {}", pad(&truncated_label, label_width)),
                     base,
                 ));
                 let used: usize = spans.iter().map(|s| disp_width(&s.content)).sum();
@@ -274,24 +267,6 @@ fn render_rows(
     f.render_widget(Paragraph::new(lines), inner);
 }
 
-/// Dev servers. Killable; see `App::on_key`.
-pub fn render_localhost(f: &mut Frame, area: Rect, app: &App) {
-    let rows = app.localhost_rows();
-    render_rows(f, area, app, "localhost", matches!(app.focus, Focus::Localhost), &rows, false, false);
-}
-
-/// Background agents and apps.
-pub fn render_others(f: &mut Frame, area: Rect, app: &App) {
-    let rows = app.other_rows();
-    render_rows(f, area, app, "others", matches!(app.focus, Focus::Others), &rows, false, false);
-}
-
-/// Narrow-terminal fallback: all groups in one card, with headers.
-pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let rows: Vec<&PortRow> = app.slow.as_ref().map(|s| s.rows.iter().collect()).unwrap_or_default();
-    render_rows(f, area, app, "Ports", matches!(app.focus, Focus::Localhost), &rows, true, true);
-}
-
 #[cfg(test)]
 mod tests {
     use ratatui::backend::TestBackend;
@@ -304,7 +279,7 @@ mod tests {
     /// Render a given `App`'s ports card at a given size.
     fn draw_app(app: &App, w: u16, h: u16) -> Vec<String> {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        t.draw(|f| super::render(f, f.area(), app)).unwrap();
+        t.draw(|f| super::render(f, f.area(), app, super::Card::Combined)).unwrap();
         let b = t.backend().buffer().clone();
         (0..h)
             .map(|y| (0..w).map(|x| b[(x, y)].symbol().to_string()).collect())
@@ -322,16 +297,18 @@ mod tests {
         let mut app = App::new(false);
         app.focus = Focus::Localhost;
         app.ingest(Snapshot::Slow(SlowSnap { rows, sessions: Vec::new(), stale: false }));
-        app.selected = selected;
+        app.select(selected);
         app
     }
 
-    /// 4 localhost rows, 4 claude rows, 2 other rows — spans multiple
-    /// groups and outnumbers any reasonable `visible_rows` budget, which is
-    /// what it takes to reproduce the header/offset mismatch in finding 1.
+    /// 10 localhost rows, 4 claude rows, 2 other rows. Only the localhost
+    /// group is addressable by the cursor (`Focus::Localhost` is the only
+    /// focus this card answers to), so the scrollable range has to live
+    /// there; the other two groups are present so their headers still charge
+    /// against the height budget.
     fn scroll_test_rows() -> Vec<PortRow> {
         let mut rows = Vec::new();
-        for i in 0..4i32 {
+        for i in 0..10i32 {
             rows.push(PortRow {
                 group: PortGroup::Localhost,
                 label: format!("local{i}"),
@@ -401,6 +378,8 @@ mod tests {
         let rows = scroll_test_rows();
         for visible_rows in 4u16..=14 {
             for &selected in &[0usize, 3, 4, 7, 8, 9] {
+                // Every index here is inside the localhost group — the only
+                // rows this card's cursor can address.
                 let app = app_with_rows(rows.clone(), selected);
                 let out = draw_app(&app, 46, visible_rows + 2).join("\n");
                 let label = &rows[selected].label;
@@ -437,7 +416,7 @@ mod tests {
 
         // Test render_localhost at compact height (6 rows)
         let mut t = Terminal::new(TestBackend::new(46, 6)).unwrap();
-        t.draw(|f| super::render_localhost(f, f.area(), &app)).unwrap();
+        t.draw(|f| super::render(f, f.area(), &app, super::Card::Localhost)).unwrap();
         let buf = t.backend().buffer().clone();
         let mut text = String::new();
         for y in 0..6u16 {
@@ -584,13 +563,13 @@ mod tests {
     fn compact_markers_map_to_the_correct_group_colour() {
         // `compact_tier_drops_headers_and_uses_markers` only checks that a
         // '●' appears somewhere — it can't tell claude's '○' apart from
-        // other's '○'. Check the actual cell colour at each marker. Select
-        // an out-of-range row so nothing is highlighted — a selected
-        // marker's colour is overridden by the highlight style, not its
-        // group colour.
-        let app = app_with_rows(one_row_per_group(), 99);
+        // other's '○'. Check the actual cell colour at each marker. Leave the
+        // card unfocused so nothing is highlighted — a selected marker's
+        // colour is overridden by the highlight style, not its group colour.
+        let mut app = app_with_rows(one_row_per_group(), 0);
+        app.focus = Focus::Processes;
         let mut t = Terminal::new(TestBackend::new(46, 6)).unwrap();
-        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        t.draw(|f| super::render(f, f.area(), &app, super::Card::Combined)).unwrap();
         let buf = t.backend().buffer().clone();
         let lines: Vec<String> =
             (0..6u16).map(|y| (0..46u16).map(|x| buf[(x, y)].symbol().to_string()).collect()).collect();

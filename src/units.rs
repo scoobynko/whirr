@@ -16,6 +16,14 @@ pub fn fmt_bytes(b: u64) -> String {
     }
 }
 
+/// Gibibytes to one decimal with a bare `G` suffix, e.g. `6.5G` — the compact
+/// form the Memory card's hero number and its folded pressure/swap line use
+/// where `fmt_bytes`' longer `6.5 GB` would not fit. Same 1024 base as
+/// `fmt_bytes`, so the two never disagree about a value.
+pub fn fmt_gib(b: u64) -> String {
+    format!("{:.1}G", b as f64 / 1024.0_f64.powi(3))
+}
+
 pub fn fmt_rate(bps: f64) -> String {
     if bps < 1.0 {
         return "0 B/s".into();
@@ -42,6 +50,16 @@ mod tests {
         assert_eq!(fmt_bytes(0), "0 B");
         assert_eq!(fmt_bytes(1536), "1.5 KB");
         assert_eq!(fmt_bytes(16 * 1024 * 1024 * 1024), "16.0 GB");
+    }
+
+    #[test]
+    fn gib_matches_fmt_bytes_at_the_same_scale() {
+        assert_eq!(fmt_gib(0), "0.0G");
+        assert_eq!(fmt_gib(7 * 1024 * 1024 * 1024), "7.0G");
+        // Same base as fmt_bytes, so a card showing both never contradicts
+        // itself: 7_000_000_000 B is 6.5 GiB either way.
+        assert_eq!(fmt_gib(7_000_000_000), "6.5G");
+        assert_eq!(fmt_bytes(7_000_000_000), "6.5 GB");
     }
 
     #[test]

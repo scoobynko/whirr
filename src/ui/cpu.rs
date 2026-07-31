@@ -1,17 +1,13 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use super::{font, theme};
+use super::{font, gauge, theme};
 use crate::app::App;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = theme::panel_block("CPU", false);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
+    let inner = gauge::frame(f, area, "CPU");
     let Some(fast) = app.fast.as_ref() else {
-        f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), inner);
-        return;
+        return gauge::unavailable(f, inner);
     };
 
     if font::hero_fits(inner) {
@@ -24,19 +20,18 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         // The row goes to the history chart instead, where it buys real
         // resolution.
         let rows = Layout::vertical([
-            Constraint::Length(5), // hero
-            Constraint::Min(3),    // history chart
+            Constraint::Length(gauge::HERO_ROWS),
+            Constraint::Min(3), // history chart
         ])
         .split(inner);
         // total_cpu is documented 0..100, so "100%" (the widest case) never
-        // gets close to overflowing a 28-wide card, but big_text_fit guards
-        // it the same way temp.rs/power.rs guard their hero numbers — a
-        // dropped '%' is a narrower, still-legible fallback if that ever
+        // gets close to overflowing a 28-wide card, but the coarse fallback
+        // guards it the same way temp.rs/power.rs guard their hero numbers —
+        // a dropped '%' is a narrower, still-legible fallback if that ever
         // changes.
         let precise = format!("{:.0}%", fast.total_cpu);
         let coarse = format!("{:.0}", fast.total_cpu);
-        let hero = font::hero_lines(&precise, &coarse, inner.width, theme::ACCENT);
-        f.render_widget(Paragraph::new(hero), rows[0]);
+        gauge::hero(f, rows[0], &precise, &coarse, theme::ACCENT);
         render_history(f, rows[1], app);
     } else {
         // The compact tier used to spend its top 3 rows on a numbered per-core

@@ -76,17 +76,19 @@ pub fn run(tx: Sender<Snapshot>) {
         let net_rx_total = rx_total.saturating_sub(base_rx);
         let net_tx_total = tx_total.saturating_sub(base_tx);
 
-        let per_core: Vec<f32> = sys.cpus().iter().map(|c| c.cpu_usage()).collect();
-        let total_cpu = if per_core.is_empty() {
+        // Per-core loads are averaged here and not carried further: the UI
+        // dropped its per-core views, so shipping the vector every tick was
+        // allocating and sending data nothing read.
+        let cores = sys.cpus();
+        let total_cpu = if cores.is_empty() {
             0.0
         } else {
-            per_core.iter().sum::<f32>() / per_core.len() as f32
+            cores.iter().map(sysinfo::Cpu::cpu_usage).sum::<f32>() / cores.len() as f32
         };
 
         let processes = select_top(scanner.scan());
 
         let snap = FastSnap {
-            per_core,
             total_cpu,
             processes,
             net_rx_rate: rx_rate,

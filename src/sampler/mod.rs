@@ -21,8 +21,7 @@ pub struct ProcInfo {
 }
 
 pub struct FastSnap {
-    pub per_core: Vec<f32>,       // 0..100 per core, order = OS core order
-    pub total_cpu: f32,           // 0..100
+    pub total_cpu: f32,           // 0..100, the mean across cores
     pub processes: Vec<ProcInfo>, // union of top 50 by cpu and top 50 by mem
     pub net_rx_rate: f64,         // bytes/sec
     pub net_tx_rate: f64,

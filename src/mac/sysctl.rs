@@ -39,8 +39,6 @@ pub fn sysctl_u64(name: &str) -> Option<u64> {
 pub struct SystemStatic {
     pub chip: String,
     pub os_version: String,
-    pub p_cores: usize,
-    pub e_cores: usize,
 }
 
 impl SystemStatic {
@@ -48,8 +46,6 @@ impl SystemStatic {
         Self {
             chip: sysctl_string("machdep.cpu.brand_string").unwrap_or_else(|| "Mac".into()),
             os_version: sysctl_string("kern.osproductversion").unwrap_or_default(),
-            p_cores: sysctl_u32("hw.perflevel0.physicalcpu").unwrap_or(0) as usize,
-            e_cores: sysctl_u32("hw.perflevel1.physicalcpu").unwrap_or(0) as usize,
         }
     }
 }
@@ -63,6 +59,5 @@ mod tests {
         let s = SystemStatic::read();
         assert!(s.chip.contains("Apple"));
         assert!(!s.os_version.is_empty());
-        assert!(s.p_cores > 0 && s.e_cores > 0);
     }
 }

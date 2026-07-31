@@ -1,42 +1,30 @@
 use ratatui::prelude::*;
-use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use super::{font, theme};
+use super::{font, gauge, theme};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = theme::panel_block("Temp", false);
-    let inner = block.inner(area);
-    f.render_widget(block, area);
-
-    let temp = app.medium.as_ref().and_then(|m| m.temp_c);
-    let Some(t) = temp else {
-        f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), inner);
-        return;
+    let inner = gauge::frame(f, area, "Temp");
+    let Some(t) = app.medium.as_ref().and_then(|m| m.temp_c) else {
+        return gauge::unavailable(f, inner);
     };
     let color = theme::temp_color(t);
 
-    if font::hero_fits(inner) {
-        let rows = Layout::vertical([Constraint::Length(5), Constraint::Min(3)]).split(inner);
-        let precise = format!("{t:.1}°C");
-        let coarse = format!("{t:.0}°C");
-        let hero = font::hero_lines(&precise, &coarse, inner.width, color);
-        f.render_widget(Paragraph::new(hero), rows[0]);
-        render_chart(f, rows[1], app, color);
+    // A 3-column vertical thermometer (`▐█▌` per row, a `●` bulb at the
+    // bottom) used to sit to the left of the compact reading. Dropped: it
+    // restated the number printed right beside it, it read as a stray progress
+    // bar rather than a temperature, and stacked `▐█▌` rows seam in
+    // Terminal.app the same way every other block-glyph column does (see
+    // `ui/spark.rs`). The chart takes the full card width at both tiers now.
+    let hero = font::hero_fits(inner);
+    let head = if hero { gauge::HERO_ROWS } else { 1 };
+    let rows = Layout::vertical([Constraint::Length(head), Constraint::Min(2)]).split(inner);
+    if hero {
+        gauge::hero(f, rows[0], &format!("{t:.1}°C"), &format!("{t:.0}°C"), color);
     } else {
-        // A 3-column vertical thermometer (`▐█▌` per row, a `●` bulb at the
-        // bottom) used to sit to the left of the reading here. Dropped: it
-        // restated the number printed right beside it, it read as a stray
-        // progress bar rather than a temperature, and stacked `▐█▌` rows seam
-        // in Terminal.app the same way every other block-glyph column does
-        // (see `ui/spark.rs`). The chart takes the full card width instead.
-        let rows = Layout::vertical([Constraint::Length(1), Constraint::Min(2)]).split(inner);
-        f.render_widget(
-            Paragraph::new(Span::styled(format!("{t:.1}°C"), Style::default().fg(color).bold())),
-            rows[0],
-        );
-        render_chart(f, rows[1], app, color);
+        gauge::readout(f, rows[0], &format!("{t:.1}°C"), color);
     }
+    render_chart(f, rows[1], app, color);
 }
 
 fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
