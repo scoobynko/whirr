@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.2
+
+_2026-08-02 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.1...v0.3.2)_
+
+
+### Documentation
+
+- Unwrap the demo video link so GitHub embeds it ([690bb3a](https://github.com/scoobynko/whirr/commit/690bb3a4ac9450217096408fec1dd06e1c9ad3ca))
+
+### Fixed
+
+- Title GitHub Releases v0.3.1, not "0.3.1 - 2026-08-02" ([014c88c](https://github.com/scoobynko/whirr/commit/014c88cdcbe873d3bdee152869376e19a3a8e4ca))
 
 ## [0.3.1](https://github.com/scoobynko/whirr/compare/v0.3.0...v0.3.1) - 2026-08-02
 
