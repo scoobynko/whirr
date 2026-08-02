@@ -23,6 +23,48 @@ publish = true
 protect_breaking_commits = true
 sort_commits = "oldest"
 
+# The version heading is load-bearing beyond this file: cargo-dist reads it out
+# of CHANGELOG.md and uses it verbatim as the GitHub Release title. The default
+# heading (`## [0.3.1](compare-link) - 2026-08-02`) is why the releases were
+# titled "0.3.1 - 2026-08-02" instead of matching their own tag.
+#
+# So the heading is just `## v0.3.1`, and the date and compare link move to the
+# line below it — the changelog keeps both, and the Release title becomes
+# `v0.3.1`.
+# The repo URL is written out rather than built from `remote.github.owner`:
+# that variable is only populated when release-plz can reach the GitHub API, so
+# a template using it renders fine in CI and blows up locally with "Variable
+# `remote.github.owner` not found in context" — and a template error means no
+# release PR is opened at all. Hardcoding keeps it testable with
+# `release-plz update` before it ever reaches CI.
+body = """
+{%- macro remote_url() -%}
+  https://github.com/scoobynko/whirr
+{%- endmacro -%}
+
+{% if version -%}
+## v{{ version | trim_start_matches(pat="v") }}
+
+_{{ timestamp | date(format="%Y-%m-%d") }}\
+{%- if previous.version %} · \
+[compare]({{ self::remote_url() }}/compare/\
+v{{ previous.version | trim_start_matches(pat="v") }}...\
+v{{ version | trim_start_matches(pat="v") }})\
+{%- endif %}_
+{% else -%}
+## [Unreleased]
+{% endif %}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+{% if commit.breaking %}[**breaking**] {% endif %}\
+{{ commit.message | upper_first }} \
+([{{ commit.id | truncate(length=7, end="") }}]({{ self::remote_url() }}/commit/{{ commit.id }}))
+{%- endfor %}
+{% endfor %}
+"""
+
 commit_parsers = [
   { message = "^feat", group = "Added" },
   { message = "^fix", group = "Fixed" },
