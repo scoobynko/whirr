@@ -6,7 +6,8 @@ network throughput, localhost dev servers and Claude Code sessions — all on on
 glanceable screen. Named after the sound of a fan spinning up (its logo is one).
 
 ```
-(screenshot placeholder — paste a terminal capture of `whirr` at ≥120×30 here)
+https://github.com/user-attachments/assets/0cd0abed-fcae-4c5e-893d-05d02d69a0e7
+
 ```
 
 ## Why
