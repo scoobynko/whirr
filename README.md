@@ -5,10 +5,7 @@ running all day: processes, CPU, temperature, power draw, memory pressure,
 network throughput, localhost dev servers and Claude Code sessions — all on one
 glanceable screen. Named after the sound of a fan spinning up (its logo is one).
 
-```
 https://github.com/user-attachments/assets/0cd0abed-fcae-4c5e-893d-05d02d69a0e7
-
-```
 
 ## Why
 
