@@ -60,6 +60,12 @@ pub struct App {
     /// so a panel that shrinks under its own cursor needs no separate fixup.
     selected: [usize; Focus::ALL.len()],
     pub pending_kill: Option<(i32, String)>,
+    /// A URL the `o` key asked to open, waiting for the event loop to drain it
+    /// with `take_open_request`. Spawning the browser here instead would put a
+    /// child process behind every keypress — including in tests, which press
+    /// keys by the hundred. `App` decides *what* to open; `main` does the
+    /// opening.
+    open_request: Option<String>,
     pub message: Option<String>,
     pub no_fan: bool,
     /// The burst's inner-ring rotation in degrees, wrapped to `0.0..360.0`.
@@ -85,6 +91,7 @@ impl App {
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
             pending_kill: None,
+            open_request: None,
             message: None,
             no_fan,
             fan_angle_deg: 0.0,
@@ -343,8 +350,31 @@ impl App {
                 }
                 Focus::Sessions | Focus::Others => {}
             },
+            // Opening is the read-only counterpart to `k`, so it lives on the
+            // same card and needs no confirmation: a browser tab is undone by
+            // closing it, a SIGTERM is not.
+            // Gated on focus, not just on there being a localhost row to find:
+            // `selected()` is the *focused* panel's cursor, so an ungated arm
+            // would index the localhost list with the process cursor and open
+            // whatever happened to sit at that offset.
+            KeyCode::Char('o') if matches!(self.focus, Focus::Localhost) => {
+                if let Some(r) = self.localhost_rows().get(self.selected()) {
+                    // Lowest port: a dev server that owns several is almost
+                    // always reachable on the lowest, with the rest carrying
+                    // HMR sockets and inspectors nobody wants a tab of.
+                    if let Some(port) = r.ports.first() {
+                        self.open_request = Some(format!("http://localhost:{port}"));
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Take the pending open request, if any. The event loop calls this after
+    /// every key and hands the URL to `open(1)`.
+    pub fn take_open_request(&mut self) -> Option<String> {
+        self.open_request.take()
     }
 
     /// Simulated Mac fan curve: lazy below ~55°C, ramping steeply toward
@@ -652,6 +682,40 @@ mod tests {
         assert_eq!(pid, 501);
         assert!(label.contains("glassbook-frontend"), "dialog should name the process: {label}");
         assert!(label.contains('3'), "dialog should say how many ports die with it: {label}");
+    }
+
+    #[test]
+    fn o_requests_the_lowest_port_of_the_selected_localhost_row() {
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.select(0); // glassbook-frontend, listening on 4206, 6006 and 63643
+        press(&mut a, 'o');
+        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:4206"));
+    }
+
+    #[test]
+    fn an_open_request_is_taken_once() {
+        // The event loop drains this to spawn `open`. If it survived the
+        // take, every later keypress would reopen the same tab.
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.select(1);
+        press(&mut a, 'o');
+        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:3000"));
+        assert_eq!(a.take_open_request(), None, "a drained request must not come back");
+    }
+
+    #[test]
+    fn o_is_inert_on_every_card_but_localhost() {
+        // Same rule as `k`: a key that means nothing on a card must do
+        // nothing there, rather than open a browser at a system daemon's port.
+        for focus in [Focus::Processes, Focus::Sessions, Focus::Others] {
+            let mut a = App::demo();
+            a.focus = focus;
+            a.select(0);
+            press(&mut a, 'o');
+            assert_eq!(a.take_open_request(), None, "{focus:?} has no URL to open");
+        }
     }
 
     #[test]

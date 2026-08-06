@@ -42,6 +42,7 @@ KEYS (while running):
     ↑ ↓        move the selection within the focused card
     tab        cycle focus between cards
     c / m      sort processes by CPU / memory
+    o          open the selected dev server in your browser
     k          kill the selected process or dev server (asks first)
     q          quit
 ";
@@ -152,7 +153,14 @@ fn main() -> io::Result<()> {
         if event::poll(timeout)? {
             match event::read()? {
                 Event::Key(key) if key.kind != crossterm::event::KeyEventKind::Release => {
-                    app.on_key(key)
+                    app.on_key(key);
+                    // `App` decides what to open; the spawning lives here so
+                    // no keypress in a test can launch a browser. Errors are
+                    // dropped: `open` failing is not worth stealing a row of
+                    // the dashboard to report.
+                    if let Some(url) = app.take_open_request() {
+                        let _ = std::process::Command::new("open").arg(url).spawn();
+                    }
                 }
                 Event::Resize(_, _) => app.dirty = true,
                 _ => {}

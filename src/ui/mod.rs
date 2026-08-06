@@ -144,9 +144,11 @@ fn beside_network(f: &mut Frame, area: Rect, app: &App, screen: &Screen) -> Rect
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let show_sort = matches!(app.focus, Focus::Processes);
     let show_kill = matches!(app.focus, Focus::Processes | Focus::Localhost);
-    let items: [Option<&str>; 5] = [
+    let show_open = matches!(app.focus, Focus::Localhost);
+    let items: [Option<&str>; 6] = [
         Some("↑↓ select"),
         show_sort.then_some("c/m sort"),
+        show_open.then_some("o open"),
         show_kill.then_some("k kill"),
         Some("tab focus"),
         Some("q quit"),

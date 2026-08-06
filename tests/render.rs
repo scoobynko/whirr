@@ -386,6 +386,19 @@ fn footer_kill_shows_only_for_killable_panels() {
 }
 
 #[test]
+fn footer_open_shows_only_for_localhost() {
+    let c = draw_app_at(&demo_with_focus(Focus::Localhost), 120, 40);
+    assert!(c.contains("o open"), "Localhost should show o open");
+    for focus in [Focus::Processes, Focus::Sessions, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(
+            !c.contains("o open"),
+            "{focus:?} must not show o open — only a dev server has a URL"
+        );
+    }
+}
+
+#[test]
 fn footer_sort_shows_only_for_processes() {
     let c = draw_app_at(&demo_with_focus(Focus::Processes), 120, 40);
     assert!(c.contains("c/m sort"), "Processes should show c/m sort");

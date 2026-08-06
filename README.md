@@ -75,12 +75,16 @@ network, then power, then temperature. Processes and CPU always survive.
 | `Tab` | cycle focus: processes → localhost → Claude sessions → others |
 | `↑` / `↓` | move the selection within the focused card |
 | `c` / `m` | sort processes by CPU / memory |
+| `o` | open the selected dev server in your browser (localhost card only) |
 | `k` | kill the selected process or dev server (SIGTERM, `y`/`n` to confirm) |
 | `q` / `Ctrl-C` | quit |
 
 `k` is deliberately inert on the Claude sessions and others cards: ending a
 session mid-conversation, or killing a system agent, shouldn't be one keypress
-away.
+away. `o` lives only on the localhost card — a Claude session has no URL, and
+a system daemon's port is not something to point a browser at. It opens the
+row's lowest port, which is the server itself rather than its HMR socket.
+Unlike `k`, it doesn't ask: a browser tab is undone by closing it.
 
 ## Flags
 
