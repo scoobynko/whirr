@@ -1,6 +1,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use whirr::app::{App, Focus};
+use whirr::sampler::ProcInfo;
 use whirr::ui;
 use whirr::ui::theme;
 
@@ -369,6 +370,40 @@ fn tier_boundary_is_exactly_120x30() {
     assert_eq!(first_gauge_row(120, 30), 9, "120x30 must be full tier");
     assert_eq!(first_gauge_row(119, 30), 5, "119x30 must be compact");
     assert_eq!(first_gauge_row(120, 29), 5, "120x29 must be compact");
+}
+
+/// `App::demo()` carrying `n` processes, named `proc00`..`proc{n-1}` and
+/// already in CPU-descending order, so a render can be read row by row.
+fn demo_with_processes(n: i32) -> App {
+    let mut app = App::demo();
+    let f = app.fast.as_mut().expect("demo() ingests a fast snapshot");
+    f.processes = (0..n)
+        .map(|i| ProcInfo {
+            pid: 1000 + i,
+            name: format!("proc{i:02}"),
+            cpu: (n - i) as f32,
+            mem: 1_000_000,
+        })
+        .collect();
+    app
+}
+
+#[test]
+fn a_tall_process_panel_fills_with_processes_instead_of_blank_rows() {
+    // The panel takes all leftover height in the three-card body, so at 120x60
+    // it is ~26 content rows. It used to draw 10 of them and leave the rest
+    // empty, while the sampler was already holding 50.
+    let app = demo_with_processes(30);
+    let g = draw_grid_app(&app, 120, 60);
+    let drawn = g.iter().filter(|l| l.contains("proc")).count();
+    assert!(
+        drawn > 10,
+        "a 26-row panel should draw more than the old 10-row cap, drew {drawn}"
+    );
+    assert!(
+        g.iter().any(|l| l.contains("proc19")),
+        "the 20th process should be on screen in a panel this tall"
+    );
 }
 
 // --- global footer -------------------------------------------------------

@@ -39,9 +39,6 @@ pub enum SortBy {
     Mem,
 }
 
-/// The process table shows at most this many rows; selection clamps with it.
-pub const MAX_VISIBLE_PROCS: usize = 10;
-
 pub struct App {
     pub statics: SystemStatic,
     pub fast: Option<FastSnap>,
@@ -237,7 +234,7 @@ impl App {
 
     fn focused_len(&self) -> usize {
         match self.focus {
-            Focus::Processes => self.visible_processes().len(),
+            Focus::Processes => self.processes().len(),
             Focus::Localhost => self.localhost_rows().len(),
             Focus::Sessions => self.sessions().len(),
             Focus::Others => self.other_rows().len(),
@@ -258,14 +255,20 @@ impl App {
         self.dirty = true;
     }
 
-    pub fn visible_processes(&self) -> &[ProcInfo] {
-        self.fast.as_ref().map_or(&[], |f| {
-            &f.processes[..f.processes.len().min(MAX_VISIBLE_PROCS)]
-        })
+    /// Every process the fast tick sampled, in sort order.
+    ///
+    /// This used to truncate to a constant 10, which had nothing to do with
+    /// how much room the panel actually had — in the three-card body the table
+    /// is handed all the leftover height, so a tall terminal drew ten rows
+    /// above a stack of blank ones. How many fit is a rendering question, and
+    /// `ui::processes` already answers it by windowing this slice against its
+    /// own height.
+    pub fn processes(&self) -> &[ProcInfo] {
+        self.fast.as_ref().map_or(&[], |f| f.processes.as_slice())
     }
 
     /// Live CPU for an arbitrary pid — the ports card joins claude rows against
-    /// the fast tick. Unlike `visible_processes`, this searches the full list.
+    /// the fast tick. Unlike `processes`, this searches the full list.
     pub fn cpu_of(&self, pid: i32) -> Option<f32> {
         self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
     }
@@ -335,7 +338,7 @@ impl App {
             }
             KeyCode::Char('k') => match self.focus {
                 Focus::Processes => {
-                    if let Some(p) = self.visible_processes().get(self.selected()) {
+                    if let Some(p) = self.processes().get(self.selected()) {
                         self.pending_kill = Some((p.pid, p.name.clone()));
                     }
                 }
@@ -459,11 +462,11 @@ mod tests {
     #[test]
     fn sort_toggle_reorders() {
         let mut a = app_with_procs();
-        assert_eq!(a.visible_processes()[0].name, "hog");
+        assert_eq!(a.processes()[0].name, "hog");
         a.on_key(key('m'));
-        assert_eq!(a.visible_processes()[0].name, "ram");
+        assert_eq!(a.processes()[0].name, "ram");
         a.on_key(key('c'));
-        assert_eq!(a.visible_processes()[0].name, "hog");
+        assert_eq!(a.processes()[0].name, "hog");
     }
 
     #[test]
@@ -635,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn process_view_caps_at_ten() {
+    fn the_process_table_offers_every_sampled_process() {
         let mut a = App::new(false);
         let procs: Vec<ProcInfo> = (0..30)
             .map(|i| ProcInfo {
@@ -648,23 +651,28 @@ mod tests {
         let mut f = demo_fast();
         f.processes = procs;
         a.ingest(Snapshot::Fast(f));
-        assert_eq!(a.visible_processes().len(), 10);
-        for _ in 0..15 {
+        assert_eq!(a.processes().len(), 30, "the table offers every sampled process");
+        // The cursor clamps to the list, not to a display constant: how many
+        // rows are on screen is the renderer's business, and it windows this
+        // slice against its own height.
+        for _ in 0..40 {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
-        assert_eq!(a.selected(), 9);
+        assert_eq!(a.selected(), 29);
     }
 
     #[test]
-    fn cpu_of_finds_pids_beyond_the_visible_window() {
+    fn cpu_of_finds_a_pid_anywhere_in_the_sample() {
+        // cpu_of is how the ports and sessions cards join their rows against
+        // the fast tick, so it searches by pid rather than by position — the
+        // process it wants is routinely nowhere near the top of the table.
         let mut a = App::new(false);
         let mut f = demo_fast();
-        // More processes than MAX_VISIBLE_PROCS, with the target last.
-        f.processes = (0..MAX_VISIBLE_PROCS as i32 + 5)
+        f.processes = (0..15)
             .map(|i| ProcInfo { pid: 900 + i, name: format!("p{i}"), cpu: i as f32, mem: 0 })
             .collect();
         a.ingest(Snapshot::Fast(f));
-        assert_eq!(a.cpu_of(900 + MAX_VISIBLE_PROCS as i32 + 4), Some(14.0));
+        assert_eq!(a.cpu_of(914), Some(14.0), "the last-sorted process is still findable");
         assert_eq!(a.cpu_of(1), None);
     }
 

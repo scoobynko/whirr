@@ -19,7 +19,7 @@ pub mod theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph};
 
-use crate::app::{App, Focus, MAX_VISIBLE_PROCS};
+use crate::app::{App, Focus};
 use screen::{Body, Gauge, Screen, Tier};
 
 /// Draw one frame.
@@ -101,6 +101,16 @@ fn render_body(f: &mut Frame, area: Rect, app: &App, screen: &Screen) {
             ports::render(f, cards[2], app, ports::Card::Others);
         }
         Body::ProcessesOverPorts => {
+            /// Process rows the table is *budgeted* in this body — the only
+            /// place a number like this belongs. Here the table and the ports
+            /// card share one column, so the table has to stop somewhere or
+            /// ports starves; in `ThreeCards` the cards sit below and the
+            /// table simply takes the rest of the height.
+            ///
+            /// This used to be `app::MAX_VISIBLE_PROCS` and also truncated the
+            /// process list itself, which is what made a tall three-card panel
+            /// draw ten rows over a stack of blank ones.
+            const PROC_PANEL_ROWS: u16 = 10;
             let left = beside_network(f, area, app, screen);
             // The process table claims up to its cap (10 rows + footer +
             // borders) and ports gets the rest, but never below its floor: at
@@ -109,7 +119,7 @@ fn render_body(f: &mut Frame, area: Rect, app: &App, screen: &Screen) {
             // the slack. This can only ever move space between these two — the
             // header and gauge bands were resolved by `draw`'s split above.
             let rows = Layout::vertical([
-                Constraint::Max(MAX_VISIBLE_PROCS as u16 + 3),
+                Constraint::Max(PROC_PANEL_ROWS + 3),
                 Constraint::Min(4),
             ])
             .split(left);
