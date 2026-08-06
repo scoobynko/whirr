@@ -6,6 +6,19 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.3
+
+_2026-08-06 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.2...v0.3.3)_
+
+
+### Added
+
+- *(ports)* Open the selected dev server with o ([a068079](https://github.com/scoobynko/whirr/commit/a068079e3e053dc6bdf4bc5378243305f6c578f2))
+
+### Fixed
+
+- *(ports)* Find the repo above a dev server's cwd, not just at it ([e1a6418](https://github.com/scoobynko/whirr/commit/e1a6418a5030f3414976d7a917c608add6f4de62))
+- *(ui)* Let the process table fill the height it is given ([faf6bdf](https://github.com/scoobynko/whirr/commit/faf6bdf770802326b1125e0835084ec9677b8b0a))
 ## v0.3.2
 
 _2026-08-02 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.1...v0.3.2)_
