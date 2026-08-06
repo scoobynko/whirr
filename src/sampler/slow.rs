@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::mpsc::Sender;
 use std::time::Duration;
@@ -73,6 +74,34 @@ fn usable_stdout(out: &Output) -> Option<&[u8]> {
     }
 }
 
+/// Is `cwd` inside a git repository — its own root, or any directory above it?
+///
+/// The old test was a single `cwd/.git` probe, which answered a much narrower
+/// question: "is this the repo *root*". A dev server started from a package
+/// inside a monorepo failed it and dropped to the Others card.
+///
+/// `stop_at` bounds the walk and is never itself examined. It is the user's
+/// home directory in practice, because a `~/.git` from dotfiles-in-git would
+/// otherwise make every process on the machine look like a dev server.
+///
+/// Costs one `stat` per level rather than one per pid, still only on the 10s
+/// tick, and path depth bounds the loop.
+fn in_git_repo(cwd: &Path, stop_at: Option<&Path>) -> bool {
+    let mut dir = Some(cwd);
+    while let Some(d) = dir {
+        if stop_at == Some(d) {
+            return false;
+        }
+        // A worktree or submodule has `.git` as a file, not a directory —
+        // `exists` accepts both, and both mean "a checkout lives here".
+        if d.join(".git").exists() {
+            return true;
+        }
+        dir = d.parent();
+    }
+    false
+}
+
 /// One port scan. `None` means the scan failed; see `usable_stdout`.
 fn scan_ports() -> Option<Vec<PortRow>> {
     let out = Command::new("lsof")
@@ -81,11 +110,14 @@ fn scan_ports() -> Option<Vec<PortRow>> {
         .ok()?;
     let stdout = usable_stdout(&out)?;
     let ports = parse_lsof(&String::from_utf8_lossy(stdout));
+    // Read once per scan, not once per pid. Absent `HOME` just means an
+    // unbounded walk to `/`, which is the old behaviour plus the walk-up.
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     Some(ports::build_rows(&ports, |pid| {
         let cwd = crate::mac::proc::cwd(pid);
-        // One stat per unique pid per 10s tick; build_rows already
+        // A handful of stats per unique pid per 10s tick; build_rows already
         // guarantees this closure runs once per pid.
-        let is_git = cwd.as_deref().is_some_and(|c| c.join(".git").exists());
+        let is_git = cwd.as_deref().is_some_and(|c| in_git_repo(c, home.as_deref()));
         ports::ProcFacts {
             // `exec_path`, not `args`: one cheap proc_pidpath call instead of
             // a kern.argmax-sized buffer per pid. Both yield a path
@@ -122,8 +154,9 @@ pub fn run(tx: Sender<Snapshot>) {
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_lsof, usable_stdout};
+    use super::{in_git_repo, parse_lsof, usable_stdout};
     use std::os::unix::process::ExitStatusExt;
+    use std::path::{Path, PathBuf};
     use std::process::{ExitStatus, Output};
 
     /// An `lsof` result with the given exit code and streams.
@@ -195,6 +228,52 @@ n*:7000
     fn ignores_garbage() {
         assert!(parse_lsof("").is_empty());
         assert!(parse_lsof("nonsense\nlines\n").is_empty());
+    }
+
+    // `in_git_repo` is tested against this checkout rather than a fixture
+    // tree: it exists to answer a question about the real filesystem, and a
+    // temp-dir mock would only prove the mock was built right. whirr's own
+    // repo root is `CARGO_MANIFEST_DIR`, which every one of these leans on.
+    fn repo_root() -> PathBuf {
+        PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+    }
+
+    #[test]
+    fn a_repo_root_is_in_a_repo() {
+        assert!(in_git_repo(&repo_root(), None));
+    }
+
+    #[test]
+    fn a_subdirectory_of_a_repo_is_in_that_repo() {
+        // The monorepo case, and the whole point of the change: `.git` lives
+        // at the root only, so `cd apps/web && npm run dev` used to read as
+        // "not a project".
+        assert!(in_git_repo(&repo_root().join("src/ui"), None));
+    }
+
+    #[test]
+    fn a_path_outside_any_repo_is_not_in_one() {
+        assert!(!in_git_repo(Path::new("/"), None));
+    }
+
+    #[test]
+    fn the_walk_stops_below_the_boundary() {
+        // The dotfiles guard. Plenty of people keep `~` under git; if the walk
+        // were allowed to reach it, every process whose cwd is anywhere under
+        // home would classify as a dev server and the localhost card would
+        // fill with junk.
+        let root = repo_root();
+        assert!(
+            !in_git_repo(&root.join("src/ui"), Some(&root)),
+            "a repo at the boundary must not count — that is the ~/.git case"
+        );
+    }
+
+    #[test]
+    fn the_boundary_does_not_hide_a_nearer_repo() {
+        // Stopping at home must not stop *early*: a real project below the
+        // boundary still has to be found.
+        assert!(in_git_repo(&repo_root().join("src/ui"), Some(Path::new("/"))));
     }
 }
 

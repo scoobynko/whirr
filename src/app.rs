@@ -39,9 +39,6 @@ pub enum SortBy {
     Mem,
 }
 
-/// The process table shows at most this many rows; selection clamps with it.
-pub const MAX_VISIBLE_PROCS: usize = 10;
-
 pub struct App {
     pub statics: SystemStatic,
     pub fast: Option<FastSnap>,
@@ -60,6 +57,12 @@ pub struct App {
     /// so a panel that shrinks under its own cursor needs no separate fixup.
     selected: [usize; Focus::ALL.len()],
     pub pending_kill: Option<(i32, String)>,
+    /// A URL the `o` key asked to open, waiting for the event loop to drain it
+    /// with `take_open_request`. Spawning the browser here instead would put a
+    /// child process behind every keypress — including in tests, which press
+    /// keys by the hundred. `App` decides *what* to open; `main` does the
+    /// opening.
+    open_request: Option<String>,
     pub message: Option<String>,
     pub no_fan: bool,
     /// The burst's inner-ring rotation in degrees, wrapped to `0.0..360.0`.
@@ -85,6 +88,7 @@ impl App {
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
             pending_kill: None,
+            open_request: None,
             message: None,
             no_fan,
             fan_angle_deg: 0.0,
@@ -230,7 +234,7 @@ impl App {
 
     fn focused_len(&self) -> usize {
         match self.focus {
-            Focus::Processes => self.visible_processes().len(),
+            Focus::Processes => self.processes().len(),
             Focus::Localhost => self.localhost_rows().len(),
             Focus::Sessions => self.sessions().len(),
             Focus::Others => self.other_rows().len(),
@@ -251,14 +255,20 @@ impl App {
         self.dirty = true;
     }
 
-    pub fn visible_processes(&self) -> &[ProcInfo] {
-        self.fast.as_ref().map_or(&[], |f| {
-            &f.processes[..f.processes.len().min(MAX_VISIBLE_PROCS)]
-        })
+    /// Every process the fast tick sampled, in sort order.
+    ///
+    /// This used to truncate to a constant 10, which had nothing to do with
+    /// how much room the panel actually had — in the three-card body the table
+    /// is handed all the leftover height, so a tall terminal drew ten rows
+    /// above a stack of blank ones. How many fit is a rendering question, and
+    /// `ui::processes` already answers it by windowing this slice against its
+    /// own height.
+    pub fn processes(&self) -> &[ProcInfo] {
+        self.fast.as_ref().map_or(&[], |f| f.processes.as_slice())
     }
 
     /// Live CPU for an arbitrary pid — the ports card joins claude rows against
-    /// the fast tick. Unlike `visible_processes`, this searches the full list.
+    /// the fast tick. Unlike `processes`, this searches the full list.
     pub fn cpu_of(&self, pid: i32) -> Option<f32> {
         self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
     }
@@ -328,7 +338,7 @@ impl App {
             }
             KeyCode::Char('k') => match self.focus {
                 Focus::Processes => {
-                    if let Some(p) = self.visible_processes().get(self.selected()) {
+                    if let Some(p) = self.processes().get(self.selected()) {
                         self.pending_kill = Some((p.pid, p.name.clone()));
                     }
                 }
@@ -343,8 +353,31 @@ impl App {
                 }
                 Focus::Sessions | Focus::Others => {}
             },
+            // Opening is the read-only counterpart to `k`, so it lives on the
+            // same card and needs no confirmation: a browser tab is undone by
+            // closing it, a SIGTERM is not.
+            // Gated on focus, not just on there being a localhost row to find:
+            // `selected()` is the *focused* panel's cursor, so an ungated arm
+            // would index the localhost list with the process cursor and open
+            // whatever happened to sit at that offset.
+            KeyCode::Char('o') if matches!(self.focus, Focus::Localhost) => {
+                if let Some(r) = self.localhost_rows().get(self.selected()) {
+                    // Lowest port: a dev server that owns several is almost
+                    // always reachable on the lowest, with the rest carrying
+                    // HMR sockets and inspectors nobody wants a tab of.
+                    if let Some(port) = r.ports.first() {
+                        self.open_request = Some(format!("http://localhost:{port}"));
+                    }
+                }
+            }
             _ => {}
         }
+    }
+
+    /// Take the pending open request, if any. The event loop calls this after
+    /// every key and hands the URL to `open(1)`.
+    pub fn take_open_request(&mut self) -> Option<String> {
+        self.open_request.take()
     }
 
     /// Simulated Mac fan curve: lazy below ~55°C, ramping steeply toward
@@ -429,11 +462,11 @@ mod tests {
     #[test]
     fn sort_toggle_reorders() {
         let mut a = app_with_procs();
-        assert_eq!(a.visible_processes()[0].name, "hog");
+        assert_eq!(a.processes()[0].name, "hog");
         a.on_key(key('m'));
-        assert_eq!(a.visible_processes()[0].name, "ram");
+        assert_eq!(a.processes()[0].name, "ram");
         a.on_key(key('c'));
-        assert_eq!(a.visible_processes()[0].name, "hog");
+        assert_eq!(a.processes()[0].name, "hog");
     }
 
     #[test]
@@ -605,7 +638,7 @@ mod tests {
     }
 
     #[test]
-    fn process_view_caps_at_ten() {
+    fn the_process_table_offers_every_sampled_process() {
         let mut a = App::new(false);
         let procs: Vec<ProcInfo> = (0..30)
             .map(|i| ProcInfo {
@@ -618,23 +651,28 @@ mod tests {
         let mut f = demo_fast();
         f.processes = procs;
         a.ingest(Snapshot::Fast(f));
-        assert_eq!(a.visible_processes().len(), 10);
-        for _ in 0..15 {
+        assert_eq!(a.processes().len(), 30, "the table offers every sampled process");
+        // The cursor clamps to the list, not to a display constant: how many
+        // rows are on screen is the renderer's business, and it windows this
+        // slice against its own height.
+        for _ in 0..40 {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
-        assert_eq!(a.selected(), 9);
+        assert_eq!(a.selected(), 29);
     }
 
     #[test]
-    fn cpu_of_finds_pids_beyond_the_visible_window() {
+    fn cpu_of_finds_a_pid_anywhere_in_the_sample() {
+        // cpu_of is how the ports and sessions cards join their rows against
+        // the fast tick, so it searches by pid rather than by position — the
+        // process it wants is routinely nowhere near the top of the table.
         let mut a = App::new(false);
         let mut f = demo_fast();
-        // More processes than MAX_VISIBLE_PROCS, with the target last.
-        f.processes = (0..MAX_VISIBLE_PROCS as i32 + 5)
+        f.processes = (0..15)
             .map(|i| ProcInfo { pid: 900 + i, name: format!("p{i}"), cpu: i as f32, mem: 0 })
             .collect();
         a.ingest(Snapshot::Fast(f));
-        assert_eq!(a.cpu_of(900 + MAX_VISIBLE_PROCS as i32 + 4), Some(14.0));
+        assert_eq!(a.cpu_of(914), Some(14.0), "the last-sorted process is still findable");
         assert_eq!(a.cpu_of(1), None);
     }
 
@@ -652,6 +690,40 @@ mod tests {
         assert_eq!(pid, 501);
         assert!(label.contains("glassbook-frontend"), "dialog should name the process: {label}");
         assert!(label.contains('3'), "dialog should say how many ports die with it: {label}");
+    }
+
+    #[test]
+    fn o_requests_the_lowest_port_of_the_selected_localhost_row() {
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.select(0); // glassbook-frontend, listening on 4206, 6006 and 63643
+        press(&mut a, 'o');
+        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:4206"));
+    }
+
+    #[test]
+    fn an_open_request_is_taken_once() {
+        // The event loop drains this to spawn `open`. If it survived the
+        // take, every later keypress would reopen the same tab.
+        let mut a = App::demo();
+        a.focus = Focus::Localhost;
+        a.select(1);
+        press(&mut a, 'o');
+        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:3000"));
+        assert_eq!(a.take_open_request(), None, "a drained request must not come back");
+    }
+
+    #[test]
+    fn o_is_inert_on_every_card_but_localhost() {
+        // Same rule as `k`: a key that means nothing on a card must do
+        // nothing there, rather than open a browser at a system daemon's port.
+        for focus in [Focus::Processes, Focus::Sessions, Focus::Others] {
+            let mut a = App::demo();
+            a.focus = focus;
+            a.select(0);
+            press(&mut a, 'o');
+            assert_eq!(a.take_open_request(), None, "{focus:?} has no URL to open");
+        }
     }
 
     #[test]

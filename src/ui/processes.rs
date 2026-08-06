@@ -21,7 +21,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let inner = block.inner(area);
     f.render_widget(block, area);
 
-    let procs = app.visible_processes();
+    let procs = app.processes();
     if procs.is_empty() {
         f.render_widget(Paragraph::new("…").style(Style::default().fg(theme::DIM)), inner);
         return;
