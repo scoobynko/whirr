@@ -570,6 +570,32 @@ fn the_port_picker_renders_at_every_size_without_panicking() {
     }
 }
 
+// --- the running version -------------------------------------------------
+
+#[test]
+fn the_running_version_is_on_screen_whether_or_not_an_update_exists() {
+    // Without this the version is only ever visible when it is *wrong* — the
+    // update notice appears, and otherwise nothing says what you are running.
+    // "no notice" then means both "you are current" and "the check is off",
+    // which are not the same thing.
+    let expected = format!("v{}", env!("CARGO_PKG_VERSION"));
+    for app in [App::demo(), demo_with_update()] {
+        let c = draw_app_at(&app, 120, 40);
+        assert!(c.contains(&expected), "header should carry {expected}");
+    }
+}
+
+#[test]
+fn the_version_survives_every_header_tier() {
+    // Three separate header paths (full, compact, and the one-row fallback at
+    // very small heights) all render the same facts block.
+    let expected = format!("v{}", env!("CARGO_PKG_VERSION"));
+    for (w, h) in [(160, 45), (120, 40), (103, 45), (80, 24), (60, 15)] {
+        let c = draw_app_at(&App::demo(), w, h);
+        assert!(c.contains(&expected), "{w}x{h}: header lost the version");
+    }
+}
+
 // --- the update notice ---------------------------------------------------
 
 fn demo_with_update() -> App {
