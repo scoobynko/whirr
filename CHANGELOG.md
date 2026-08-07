@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.5
+
+_2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.4...v0.3.5)_
+
+
+### Added
+
+- *(sessions)* Show the tty only when a project has two sessions ([455a728](https://github.com/scoobynko/whirr/commit/455a7282656c51386740ca0cd32d86568e0d9dd7))
 ## v0.3.4
 
 _2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.3...v0.3.4)_
