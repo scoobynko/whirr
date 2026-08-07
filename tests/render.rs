@@ -5,6 +5,7 @@ use whirr::app::{App, Focus};
 use whirr::sampler::ProcInfo;
 use whirr::ui;
 use whirr::ui::theme;
+use whirr::update::Update;
 
 fn draw_at(w: u16, h: u16) -> String {
     let app = App::demo();
@@ -567,6 +568,73 @@ fn the_port_picker_renders_at_every_size_without_panicking() {
         let content = draw_app_at(&demo_pending_port_pick(), w, h);
         assert!(!content.is_empty(), "{w}x{h} produced nothing");
     }
+}
+
+// --- the running version -------------------------------------------------
+
+#[test]
+fn the_running_version_is_on_screen_whether_or_not_an_update_exists() {
+    // Without this the version is only ever visible when it is *wrong* — the
+    // update notice appears, and otherwise nothing says what you are running.
+    // "no notice" then means both "you are current" and "the check is off",
+    // which are not the same thing.
+    let expected = format!("v{}", env!("CARGO_PKG_VERSION"));
+    for app in [App::demo(), demo_with_update()] {
+        let c = draw_app_at(&app, 120, 40);
+        assert!(c.contains(&expected), "header should carry {expected}");
+    }
+}
+
+#[test]
+fn the_version_survives_every_header_tier() {
+    // Three separate header paths (full, compact, and the one-row fallback at
+    // very small heights) all render the same facts block.
+    let expected = format!("v{}", env!("CARGO_PKG_VERSION"));
+    for (w, h) in [(160, 45), (120, 40), (103, 45), (80, 24), (60, 15)] {
+        let c = draw_app_at(&App::demo(), w, h);
+        assert!(c.contains(&expected), "{w}x{h}: header lost the version");
+    }
+}
+
+// --- the update notice ---------------------------------------------------
+
+fn demo_with_update() -> App {
+    let mut app = App::demo();
+    app.update =
+        Some(Update { latest: "9.9.9".into(), hint: "brew update && brew upgrade whirr" });
+    app
+}
+
+#[test]
+fn an_available_update_is_announced_with_the_command_that_installs_it() {
+    let c = draw_app_at(&demo_with_update(), 120, 40);
+    assert!(c.contains("9.9.9"), "the notice should name the version");
+    assert!(c.contains("brew upgrade whirr"), "and say how to get it");
+}
+
+#[test]
+fn the_update_notice_does_not_displace_the_key_hints() {
+    // It shares the footer row, so the keys must survive it — they are what
+    // the row is for.
+    let c = draw_app_at(&demo_with_update(), 120, 40);
+    for hint in ["↑↓ select", "tab focus", "q quit"] {
+        assert!(c.contains(hint), "{hint} lost to the update notice");
+    }
+}
+
+#[test]
+fn a_narrow_terminal_keeps_the_keys_and_drops_the_notice() {
+    // Both cannot fit. The keys are the working UI; the notice is a nicety,
+    // so the notice is what goes.
+    let c = draw_app_at(&demo_with_update(), 60, 20);
+    assert!(c.contains("q quit"), "keys must survive at 60 columns");
+    assert!(!c.contains("9.9.9"), "the notice should stand down rather than overlap the keys");
+}
+
+#[test]
+fn no_update_means_no_notice() {
+    let c = draw_app_at(&App::demo(), 120, 40);
+    assert!(!c.contains("available"), "nothing should be announced when nothing is newer");
 }
 
 // --- global footer -------------------------------------------------------

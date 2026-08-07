@@ -10,6 +10,9 @@ pub enum Snapshot {
     Fast(FastSnap),
     Medium(MediumSnap),
     Slow(SlowSnap),
+    /// A newer release exists. Arrives at most once per run, on its own
+    /// thread, and only when there is something to say.
+    Update(crate::update::Update),
 }
 
 #[derive(Clone)]

@@ -132,7 +132,17 @@ fn facts_paragraph(app: &App) -> Paragraph<'_> {
             app.statics.chip, app.statics.os_version
         )),
         Line::from(format!("up {} · load {:.2}", fmt_duration(uptime), load)),
-        Line::from(""),
+        // Costs no layout: this row was already reserved and rendered blank.
+        //
+        // Without it the version is only ever visible when it is *wrong* —
+        // the footer's update notice appears, and otherwise nothing says what
+        // you are running. "No notice" would then mean both "you are current"
+        // and "the check is switched off", which are not the same thing. It
+        // also saves a trip to `whirr --version` when reporting a bug.
+        //
+        // `v` prefixed to match the git tags and GitHub releases, rather than
+        // the bare number `--version` prints.
+        Line::from(format!("v{}", env!("CARGO_PKG_VERSION"))),
     ];
     Paragraph::new(facts)
         .style(Style::default().fg(theme::DIM))
