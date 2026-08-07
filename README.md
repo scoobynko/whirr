@@ -82,9 +82,14 @@ network, then power, then temperature. Processes and CPU always survive.
 `k` is deliberately inert on the Claude sessions and others cards: ending a
 session mid-conversation, or killing a system agent, shouldn't be one keypress
 away. `o` lives only on the localhost card — a Claude session has no URL, and
-a system daemon's port is not something to point a browser at. It opens the
-row's lowest port, which is the server itself rather than its HMR socket.
-Unlike `k`, it doesn't ask: a browser tab is undone by closing it.
+a system daemon's port is not something to point a browser at.
+
+A process often listens on more than one port, so `o` opens straight away only
+when there's one sensible candidate; otherwise it asks which. Ports the OS
+allocated itself (49152 and above) are never offered — they're not pages
+anyone means to visit — which is usually enough to leave a single candidate
+and no question. Nothing in a port *number* says which one you meant, so
+whirr asks rather than guessing.
 
 ## Flags
 

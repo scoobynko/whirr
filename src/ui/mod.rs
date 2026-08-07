@@ -59,7 +59,34 @@ pub fn draw(f: &mut Frame, app: &App) {
     // to appear inside the Processes box two panels away.
     if let Some((pid, name)) = &app.pending_kill {
         render_kill_dialog(f, area, *pid, name);
+    } else if let Some(pick) = &app.pending_port_pick {
+        render_port_picker(f, area, pick);
     }
+}
+
+/// "Which of this row's ports did you mean?" — asked only when the row offers
+/// more than one, because `o` guessing the lowest opened Storybook's Vite port
+/// instead of Storybook.
+///
+/// Accented rather than red: nothing here is destructive.
+fn render_port_picker(f: &mut Frame, area: Rect, pick: &crate::app::PortPick) {
+    let mut lines = vec![
+        Line::styled(pick.label.clone(), Style::default().fg(theme::TEXT).bold()),
+        Line::from(""),
+    ];
+    for (i, port) in pick.ports.iter().enumerate() {
+        lines.push(Line::from(vec![
+            // The digit that opens it, next to what it opens.
+            Span::styled(format!("{}", i + 1), Style::default().fg(theme::ACCENT).bold()),
+            Span::styled(format!("  :{port}"), Style::default().fg(theme::TEXT)),
+        ]));
+    }
+    lines.push(Line::from(""));
+    lines.push(Line::from(vec![
+        Span::styled("n", Style::default().fg(theme::TEXT).bold()),
+        Span::styled(" cancel", Style::default().fg(theme::DIM)),
+    ]));
+    modal::render(f, area, "open which port?", lines, theme::ACCENT);
 }
 
 /// "You are about to send SIGTERM to this" — the one irreversible thing whirr
@@ -185,6 +212,19 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         let text = Line::from(vec![
             Span::styled("y", Style::default().fg(theme::RED).bold()),
             Span::styled(" confirm · ", Style::default().fg(theme::DIM)),
+            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
+            Span::styled(" cancel", Style::default().fg(theme::DIM)),
+        ]);
+        f.render_widget(Paragraph::new(text), area);
+        return;
+    }
+    if let Some(pick) = &app.pending_port_pick {
+        let text = Line::from(vec![
+            Span::styled(
+                format!("1-{}", pick.ports.len()),
+                Style::default().fg(theme::ACCENT).bold(),
+            ),
+            Span::styled(" open · ", Style::default().fg(theme::DIM)),
             Span::styled("n", Style::default().fg(theme::TEXT).bold()),
             Span::styled(" cancel", Style::default().fg(theme::DIM)),
         ]);

@@ -42,7 +42,8 @@ KEYS (while running):
     ↑ ↓        move the selection within the focused card
     tab        cycle focus between cards
     c / m      sort processes by CPU / memory
-    o          open the selected dev server in your browser
+    o          open the selected dev server in your browser (asks which
+               port when the row offers more than one)
     k          kill the selected process or dev server (a dialog asks first)
     q          quit
 ";

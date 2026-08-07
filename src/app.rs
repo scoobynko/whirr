@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
 use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
-use crate::sampler::ports::{PortGroup, PortRow};
+use crate::sampler::ports::{self, PortGroup, PortRow};
 use crate::sampler::sessions::ClaudeSession;
 use crate::sampler::{
     BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
@@ -39,6 +39,25 @@ pub enum SortBy {
     Mem,
 }
 
+/// A pending "which port did you mean?".
+///
+/// `o` used to open the lowest port of a row, on the theory that a server
+/// owning several is reachable there. Storybook disproved it: its row carries
+/// a Vite port, the Storybook UI, and an ephemeral socket, and the lowest of
+/// those is not the page you want. Nothing in a port *number* says which one a
+/// human meant, so when the row is ambiguous whirr asks instead of guessing.
+#[derive(Clone, Debug)]
+pub struct PortPick {
+    /// The row's label, so the dialog can say whose ports these are.
+    pub label: String,
+    /// Candidates in the row's own order; the dialog numbers them from 1.
+    pub ports: Vec<u16>,
+}
+
+/// Entries the picker can address with a digit key. Ten would need `0`, and a
+/// row with this many browsable ports does not exist in practice.
+pub const MAX_PICKABLE_PORTS: usize = 9;
+
 pub struct App {
     pub statics: SystemStatic,
     pub fast: Option<FastSnap>,
@@ -57,6 +76,9 @@ pub struct App {
     /// so a panel that shrinks under its own cursor needs no separate fixup.
     selected: [usize; Focus::ALL.len()],
     pub pending_kill: Option<(i32, String)>,
+    /// The open action waiting on "which port?". Set only when a row offers
+    /// more than one browsable port — see `PortPick`.
+    pub pending_port_pick: Option<PortPick>,
     /// A URL the `o` key asked to open, waiting for the event loop to drain it
     /// with `take_open_request`. Spawning the browser here instead would put a
     /// child process behind every keypress — including in tests, which press
@@ -88,6 +110,7 @@ impl App {
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
             pending_kill: None,
+            pending_port_pick: None,
             open_request: None,
             message: None,
             no_fan,
@@ -305,6 +328,25 @@ impl App {
             return;
         }
 
+        // Dialogs are checked before anything else and always return, so no
+        // key can act on the dashboard behind one — and no second dialog can
+        // stack on top of the first.
+        if let Some(pick) = self.pending_port_pick.clone() {
+            match key.code {
+                // '1' addresses the first entry, so the offset is one less.
+                KeyCode::Char(c @ '1'..='9') => {
+                    let i = c as usize - '1' as usize;
+                    if let Some(&port) = pick.ports.get(i) {
+                        self.open_request = Some(Self::localhost_url(port));
+                        self.pending_port_pick = None;
+                    }
+                }
+                KeyCode::Char('n') | KeyCode::Esc => self.pending_port_pick = None,
+                _ => {}
+            }
+            return;
+        }
+
         if let Some((pid, name)) = self.pending_kill.clone() {
             match key.code {
                 KeyCode::Char('y') => {
@@ -366,17 +408,34 @@ impl App {
             // would index the localhost list with the process cursor and open
             // whatever happened to sit at that offset.
             KeyCode::Char('o') if matches!(self.focus, Focus::Localhost) => {
-                if let Some(r) = self.localhost_rows().get(self.selected()) {
-                    // Lowest port: a dev server that owns several is almost
-                    // always reachable on the lowest, with the rest carrying
-                    // HMR sockets and inspectors nobody wants a tab of.
-                    if let Some(port) = r.ports.first() {
-                        self.open_request = Some(format!("http://localhost:{port}"));
+                // Scoped: `localhost_rows` borrows self, and both arms below
+                // write to it.
+                let row = {
+                    let rows = self.localhost_rows();
+                    rows.get(self.selected())
+                        .map(|r| (r.label.clone(), ports::browsable(&r.ports)))
+                };
+                if let Some((label, ports)) = row {
+                    match ports.as_slice() {
+                        [] => {}
+                        // One candidate is not a choice — asking would make
+                        // the common case slower for nothing.
+                        [port] => self.open_request = Some(Self::localhost_url(*port)),
+                        _ => {
+                            let ports = ports.into_iter().take(MAX_PICKABLE_PORTS).collect();
+                            self.pending_port_pick = Some(PortPick { label, ports });
+                        }
                     }
                 }
             }
             _ => {}
         }
+    }
+
+    /// Everything whirr opens is a dev server on this machine, so the scheme
+    /// and host are never in question — only the port ever was.
+    fn localhost_url(port: u16) -> String {
+        format!("http://localhost:{port}")
     }
 
     /// Take the pending open request, if any. The event loop calls this after
@@ -718,13 +777,76 @@ mod tests {
         assert!(label.contains('3'), "dialog should say how many ports die with it: {label}");
     }
 
-    #[test]
-    fn o_requests_the_lowest_port_of_the_selected_localhost_row() {
+    /// `App::demo()` on the localhost card with `row` selected.
+    fn demo_on_localhost(row: usize) -> App {
         let mut a = App::demo();
         a.focus = Focus::Localhost;
-        a.select(0); // glassbook-frontend, listening on 4206, 6006 and 63643
+        a.select(row);
+        a
+    }
+
+    #[test]
+    fn o_on_a_row_with_one_candidate_opens_it_without_asking() {
+        // axterio listens on :3000 and nothing else. Asking here would make
+        // the common case slower for no benefit.
+        let mut a = demo_on_localhost(1);
         press(&mut a, 'o');
-        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:4206"));
+        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:3000"));
+        assert!(a.pending_port_pick.is_none(), "one candidate needs no dialog");
+    }
+
+    #[test]
+    fn o_on_a_row_with_several_candidates_asks_instead_of_guessing() {
+        // glassbook-frontend listens on 4206, 6006 and 63643. 63643 is
+        // ephemeral, so the real choice is 4206 vs 6006 — and guessing the
+        // lower one is exactly the Storybook bug this replaces.
+        let mut a = demo_on_localhost(0);
+        press(&mut a, 'o');
+        assert_eq!(a.take_open_request(), None, "it must not guess");
+        let pick = a.pending_port_pick.clone().expect("a choice should be pending");
+        assert_eq!(pick.ports, vec![4206, 6006]);
+        assert_eq!(pick.label, "glassbook-frontend");
+    }
+
+    #[test]
+    fn picking_the_second_port_opens_that_one() {
+        let mut a = demo_on_localhost(0);
+        press(&mut a, 'o');
+        press(&mut a, '2');
+        assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:6006"));
+        assert!(a.pending_port_pick.is_none(), "the dialog should close once answered");
+    }
+
+    #[test]
+    fn esc_and_n_cancel_the_port_pick() {
+        for cancel in [KeyCode::Esc, KeyCode::Char('n')] {
+            let mut a = demo_on_localhost(0);
+            press(&mut a, 'o');
+            a.on_key(KeyEvent::from(cancel));
+            assert!(a.pending_port_pick.is_none(), "{cancel:?} should close the picker");
+            assert_eq!(a.take_open_request(), None, "cancelling must not open anything");
+        }
+    }
+
+    #[test]
+    fn a_digit_past_the_end_of_the_list_leaves_the_picker_standing() {
+        // Two candidates, so 3 addresses nothing. Same discipline as the kill
+        // dialog: answer the keys offered, ignore the rest.
+        let mut a = demo_on_localhost(0);
+        press(&mut a, 'o');
+        press(&mut a, '3');
+        assert!(a.pending_port_pick.is_some(), "3 addresses no entry");
+        assert_eq!(a.take_open_request(), None);
+    }
+
+    #[test]
+    fn the_port_picker_swallows_keys_that_would_otherwise_act() {
+        // k must not raise a kill dialog on top of the picker.
+        let mut a = demo_on_localhost(0);
+        press(&mut a, 'o');
+        press(&mut a, 'k');
+        assert!(a.pending_kill.is_none(), "a second dialog must not stack on the first");
+        assert!(a.pending_port_pick.is_some());
     }
 
     #[test]

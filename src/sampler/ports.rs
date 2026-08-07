@@ -23,6 +23,28 @@ pub(crate) fn is_claude(exec_path: &str) -> bool {
         || exec_path.contains("/claude/versions/")
 }
 
+/// First port macOS hands out for an outbound socket or an unnamed bind
+/// (`net.inet.ip.portrange.first`). Anything at or above this was allocated by
+/// the OS rather than chosen by a developer.
+const EPHEMERAL_FLOOR: u16 = 49152;
+
+/// The ports of a row that are worth offering to a browser, in the row's own
+/// order.
+///
+/// A dev process routinely listens on more than its UI: Storybook's row also
+/// carries a Vite port and an ephemeral socket. Ephemeral ports are never a
+/// page anyone means to visit, so they are dropped — but only when something
+/// else survives, because a row that visibly has ports and answers `o` with
+/// nothing is worse than one that offers a poor choice.
+pub fn browsable(ports: &[u16]) -> Vec<u16> {
+    let named: Vec<u16> = ports.iter().copied().filter(|&p| p < EPHEMERAL_FLOOR).collect();
+    if named.is_empty() {
+        ports.to_vec()
+    } else {
+        named
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PortGroup {
     Localhost,
@@ -271,5 +293,33 @@ mod tests {
 
         // The order must be sorted by pid (100 before 200).
         assert_eq!(results[0], vec![100, 200], "rows must be ordered by pid when sort keys tie");
+    }
+
+    #[test]
+    fn ephemeral_ports_are_dropped_when_a_real_one_exists() {
+        // The Storybook row: a Vite server, Storybook, and an ephemeral socket
+        // the OS handed out. Only the first two are pages anyone would visit.
+        assert_eq!(browsable(&[4206, 6006, 63643]), vec![4206, 6006]);
+    }
+
+    #[test]
+    fn a_row_with_nothing_but_ephemeral_ports_still_offers_them() {
+        // Filtering to nothing would make `o` silently inert on a row that
+        // visibly has ports — worse than offering a poor choice.
+        assert_eq!(browsable(&[57811, 63643]), vec![57811, 63643]);
+    }
+
+    #[test]
+    fn the_ephemeral_floor_is_the_one_macos_actually_uses() {
+        // net.inet.ip.portrange.first is 49152; 49151 is still a port someone
+        // may have chosen deliberately.
+        assert_eq!(browsable(&[49151, 49152]), vec![49151]);
+    }
+
+    #[test]
+    fn browsable_keeps_the_original_order() {
+        // The picker numbers its entries, so a reordering here would silently
+        // change which key opens which port.
+        assert_eq!(browsable(&[8080, 3000, 5173]), vec![8080, 3000, 5173]);
     }
 }
