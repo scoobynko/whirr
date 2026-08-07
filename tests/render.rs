@@ -745,11 +745,32 @@ fn footer_open_shows_for_the_two_cards_that_have_somewhere_to_go() {
 }
 
 #[test]
-fn a_session_with_a_host_title_shows_it_instead_of_the_project() {
-    // cmux names a workspace after the task the session is doing, which beats
-    // a project directory by a distance.
-    let c = draw_app_at(&App::demo(), 160, 45);
-    assert!(c.contains("Fix the port picker"), "the host's own title should be shown");
+fn a_titled_session_shows_the_project_as_well_as_the_title() {
+    // The title says what the session is doing; the project says which
+    // codebase it is doing it in. Two sessions can easily be doing similar
+    // things in different repos, so neither replaces the other.
+    let g = draw_grid_app(&App::demo(), 160, 45);
+    let row = g
+        .iter()
+        .find(|l| l.contains("Fix the port picker"))
+        .expect("the host's own title should be shown");
+    assert!(row.contains("whirr"), "the project should still be on the row: {row:?}");
+}
+
+#[test]
+fn the_footer_hides_open_for_a_session_the_host_cannot_reach() {
+    // A key that does nothing is worse than no key. cmux does not report a
+    // surface for every tty, and merely activating the app looks identical to
+    // a dead keypress when whirr is running inside it.
+    let mut app = demo_with_focus(Focus::Sessions);
+    app.select(3); // eye-claudius: no tty, so nothing can match
+    assert!(!app.selected_session_is_jumpable());
+    let c = draw_app_at(&app, 120, 40);
+    assert!(!c.contains("o open"), "an unreachable session must not advertise the key");
+
+    app.select(0); // axterio: reachable
+    let c = draw_app_at(&app, 120, 40);
+    assert!(c.contains("o open"), "a reachable one should");
 }
 
 #[test]

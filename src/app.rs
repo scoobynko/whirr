@@ -306,10 +306,10 @@ impl App {
                 },
             ],
             sessions: vec![
-                ClaudeSession { pid: 601, project: "axterio".into(), title: None, tty: Some("ttys020".into()) },
-                ClaudeSession { pid: 602, project: "axterio".into(), title: None, tty: Some("ttys021".into()) },
-                ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), tty: Some("ttys004".into()) },
-                ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, tty: None },
+                ClaudeSession { pid: 601, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys020".into()) },
+                ClaudeSession { pid: 602, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys021".into()) },
+                ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), jumpable: true, tty: Some("ttys004".into()) },
+                ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, jumpable: false, tty: None },
             ],
             stale: false,
         }));
@@ -529,7 +529,7 @@ impl App {
             // The sessions card has no URL, but it does have somewhere to
             // go: the terminal the session is running in.
             KeyCode::Char('o') if matches!(self.focus, Focus::Sessions) => {
-                if let Some(s) = self.sessions().get(self.selected()) {
+                if let Some(s) = self.sessions().get(self.selected()).filter(|s| s.jumpable) {
                     self.focus_request = Some((s.pid, s.tty.clone()));
                 }
             }
@@ -562,6 +562,12 @@ impl App {
     /// and host are never in question — only the port ever was.
     fn localhost_url(port: u16) -> String {
         format!("http://localhost:{port}")
+    }
+
+    /// Whether the focused session's terminal can be put in front. Drives
+    /// both the `o` key and whether the footer offers it.
+    pub fn selected_session_is_jumpable(&self) -> bool {
+        self.sessions().get(self.selected()).is_some_and(|s| s.jumpable)
     }
 
     /// Take the pending jump-to-session request, if any.
@@ -1112,15 +1118,16 @@ mod tests {
     }
 
     #[test]
-    fn a_session_with_no_tty_can_still_be_asked_for() {
-        // Without a tty the host cannot pick the exact tab, but it can still
-        // be brought to the front — that is the last rung of the ladder, and
-        // it needs the request to be made at all.
+    fn a_session_the_host_cannot_reach_does_not_offer_the_key() {
+        // Merely activating the application is not a jump: whirr is often
+        // running inside that same app, so it is indistinguishable from a key
+        // that does nothing — which is exactly how it was reported.
         let mut a = App::demo();
         a.focus = Focus::Sessions;
-        a.select(3); // eye-claudius, tty None
+        a.select(3); // eye-claudius: no tty, so no surface can match
+        assert!(!a.selected_session_is_jumpable());
         press(&mut a, 'o');
-        assert_eq!(a.take_focus_request(), Some((604, None)));
+        assert_eq!(a.take_focus_request(), None, "the key must be inert, not hopeful");
     }
 
     #[test]

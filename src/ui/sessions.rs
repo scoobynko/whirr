@@ -44,6 +44,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // A host title already identifies the session, so a tty next to it would
     // be answering a question nobody has. Collision is judged on what the row
     // actually shows, not on the project underneath it.
+    // The project stays even when the host supplies a title. A title says
+    // what the session is *doing*; the project says which codebase it is
+    // doing it in, and two sessions can easily be doing similar things in
+    // different repos.
     fn shown(s: &ClaudeSession) -> &str {
         s.title.as_deref().unwrap_or(&s.project)
     }
@@ -53,6 +57,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let any_collision = sessions.iter().any(collides);
     let tty_w = if any_collision { TTY_W } else { 0 };
     let label_w = (inner.width as usize).saturating_sub(tty_w + CPU_W + 2);
+    // The project gets what it needs up to a ceiling; the title takes the
+    // rest, and gets nothing when there is nothing to spare.
+    let widest_project = sessions.iter().map(|s| s.project.chars().count()).max().unwrap_or(0);
+    let any_title = sessions.iter().any(|s| s.title.is_some());
+    let proj_w = if any_title { widest_project.min(label_w.saturating_sub(8)).max(1) } else { label_w };
+    let title_w = label_w.saturating_sub(proj_w);
 
     let lines: Vec<Line> = sessions
         .iter()
@@ -77,9 +87,19 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 // a project directory. Display only: the sort stays on
                 // project/tty/pid, because a title changes every few seconds
                 // and rows must not reorder under the cursor.
+                // Project first — it is what you scan for — then the host's
+                // own title in the space that is left. The title is truncated
+                // rather than the project: losing the end of "…pull latest
+                // changes" costs less than losing which repo it is.
+                Span::styled(format!(" {:<w$}", super::text::trunc(&s.project, proj_w), w = proj_w), base),
                 Span::styled(
-                    format!(" {:<w$}", super::text::trunc(shown(s), label_w), w = label_w),
-                    base,
+                    match &s.title {
+                        Some(t) if title_w > 1 => {
+                            format!(" {:<w$}", super::text::trunc(t, title_w - 1), w = title_w - 1)
+                        }
+                        _ => " ".repeat(title_w),
+                    },
+                    if selected { base } else { Style::default().fg(app.theme.dim) },
                 ),
                 Span::styled(
                     // Blank, not an em-dash, on a row that doesn't collide:
@@ -154,9 +174,10 @@ mod tests {
                 pid: 1,
                 project: "a-project-with-a-long-name".into(),
                 title: None,
+                jumpable: false,
                 tty: Some("ttys001".into()),
             },
-            ClaudeSession { pid: 2, project: "other".into(), title: None, tty: Some("ttys002".into()) },
+            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()) },
         ];
         let out = draw_app(&app, 40, 8).join("\n");
         assert!(!out.contains("ttys001"), "no collisions, so no tty column:\n{out}");

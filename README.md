@@ -100,9 +100,15 @@ agrees on.
 | Terminal.app, iTerm2 | the exact tab | — |
 | anything else | brings the app to the front | — |
 
-Where a host supplies its own name for a session, the card shows that instead
-of the project directory, and drops the tty — a title already tells two rows
-apart. Everywhere else nothing changes.
+Where a host supplies its own name for a session, the card shows it beside the
+project — the title says what the session is doing, the project says which
+codebase — and drops the tty, since the two together already tell any pair of
+rows apart. Everywhere else nothing changes.
+
+`o` only appears on a session the host can actually reach. cmux doesn't report
+a surface for every tty, and an unrecognised terminal can only be brought to
+the front, which looks identical to nothing happening when whirr is running
+inside it.
 
 The first jump on Terminal.app or iTerm2 will ask macOS for Automation
 permission. Denying it costs the precise-tab jump, nothing else.

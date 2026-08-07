@@ -38,9 +38,18 @@ fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
         let surfaces = by_host
             .entry(host.bundle.clone())
             .or_insert_with(|| crate::host::surfaces(&host));
-        if let Some(m) = surfaces.iter().find(|x| x.tty == tty) {
-            if !m.title.is_empty() {
-                s.title = Some(m.title.clone());
+        match surfaces.iter().find(|x| x.tty == tty) {
+            Some(m) => {
+                s.jumpable = true;
+                if !m.title.is_empty() {
+                    s.title = Some(m.title.clone());
+                }
+            }
+            // A scriptable terminal cannot be asked cheaply whether it holds
+            // this tty, so it is taken at its word; anything else offers no
+            // way to select a tab and must not advertise one.
+            None => {
+                s.jumpable = matches!(host.kind, crate::host::HostKind::AppleScript { .. })
             }
         }
     }
