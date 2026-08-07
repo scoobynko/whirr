@@ -6,6 +6,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.8
+
+_2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.7...v0.3.8)_
+
+
+### Added
+
+- *(sessions)* Jump to a session's terminal, and use its own label ([0c0f3a9](https://github.com/scoobynko/whirr/commit/0c0f3a9fe0a709c7e0799dff282d5d8b6b5c829d))
+
+### Fixed
+
+- *(host)* Address cmux panes by uuid, and detect the host per session ([fb48fab](https://github.com/scoobynko/whirr/commit/fb48faba88d3b6f745f228e5d96424a896a47671))
+- *(host)* Scope pane refs by workspace, and report what the jump did ([ba66e80](https://github.com/scoobynko/whirr/commit/ba66e80de757a275866e700615e2c649b462361d))
+- *(sessions)* Keep the project beside the host's title ([139a480](https://github.com/scoobynko/whirr/commit/139a480b21c4eff58f6c967e1d7a05343c7392b4))
 ## v0.3.7
 
 _2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.6...v0.3.7)_
