@@ -511,6 +511,61 @@ fn the_footer_offers_the_dialog_keys_while_a_kill_is_pending() {
     );
 }
 
+// --- the port picker -----------------------------------------------------
+
+/// `App::demo()` on the localhost card, `o` pressed on the multi-port row.
+fn demo_pending_port_pick() -> App {
+    let mut app = demo_with_focus(Focus::Localhost);
+    app.select(0); // glassbook-frontend: 4206, 6006, 63643
+    app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
+    assert!(app.pending_port_pick.is_some(), "a multi-port row should ask");
+    app
+}
+
+#[test]
+fn the_port_picker_numbers_every_candidate_and_hides_the_ephemeral_one() {
+    // Asserted on the picker's own numbered entries rather than on the
+    // flattened frame: the localhost card behind the dialog also prints these
+    // port numbers, so a looser `contains("4206")` would pass without a
+    // picker existing at all.
+    let g = draw_grid_app(&demo_pending_port_pick(), 120, 40);
+    assert!(g.iter().any(|l| l.contains("glassbook-frontend")), "picker should name the row");
+    assert!(g.iter().any(|l| l.contains("1  :4206")), "entry 1 should open 4206");
+    assert!(g.iter().any(|l| l.contains("2  :6006")), "entry 2 should open 6006");
+    assert!(
+        !g.iter().any(|l| l.contains("3  :")),
+        "there must be no third entry — 63643 is ephemeral and never a page to visit"
+    );
+}
+
+#[test]
+fn the_port_picker_lands_in_its_own_centred_box() {
+    // Same surface as the kill dialog, not a second look invented for this.
+    let g = draw_grid_app(&demo_pending_port_pick(), 120, 40);
+    let row = g.iter().position(|l| l.contains("4206")).expect("picker on screen");
+    assert!((13..27).contains(&row), "picker should sit near the middle of 40 rows, at {row}");
+    assert!(
+        g[row - 1].contains('│') || g[row - 1].contains('╭'),
+        "the candidate list should be inside a bordered box"
+    );
+}
+
+#[test]
+fn the_footer_offers_the_picker_keys_while_a_port_pick_is_pending() {
+    let c = draw_app_at(&demo_pending_port_pick(), 120, 40);
+    assert!(c.contains("1-2 open"), "footer should say which digits are live");
+    assert!(c.contains("n cancel"), "footer should offer the way out");
+    assert!(!c.contains("tab focus"), "the normal hints must not stand while keys are inert");
+}
+
+#[test]
+fn the_port_picker_renders_at_every_size_without_panicking() {
+    for (w, h) in [(200, 50), (120, 40), (80, 24), (48, 14), (30, 8), (20, 5), (6, 2), (1, 1)] {
+        let content = draw_app_at(&demo_pending_port_pick(), w, h);
+        assert!(!content.is_empty(), "{w}x{h} produced nothing");
+    }
+}
+
 // --- global footer -------------------------------------------------------
 
 #[test]
