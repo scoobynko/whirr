@@ -461,6 +461,46 @@ fn the_kill_dialog_sits_in_its_own_box() {
 }
 
 #[test]
+fn a_dialog_renders_at_every_size_without_panicking() {
+    // `renders_at_all_sizes_without_panic` sweeps the dashboard, but never
+    // with a dialog open — so the whole modal path was only ever exercised at
+    // 120x40. A dialog is drawn from a rect this module computes rather than
+    // from a Layout, so it is exactly the kind of thing that goes out of
+    // bounds on a 4x1 terminal. Two more dialogs are coming (#21, #22) and
+    // they inherit this sweep.
+    for (w, h) in [(200, 50), (120, 40), (80, 24), (48, 14), (30, 8), (20, 5), (6, 2), (1, 1)] {
+        let app = demo_pending_kill(Focus::Processes);
+        let content = draw_app_at(&app, w, h);
+        assert!(!content.is_empty(), "{w}x{h} produced nothing");
+    }
+}
+
+#[test]
+fn a_pathological_target_name_cannot_stretch_the_dialog_across_the_screen() {
+    // pending_kill carries the process name straight from libproc, untruncated
+    // — the process *table* truncates to 24 columns, the dialog does not.
+    let mut app = App::demo();
+    let f = app.fast.as_mut().expect("demo() ingests a fast snapshot");
+    f.processes[0].name = "x".repeat(300);
+    app.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
+    assert!(app.pending_kill.is_some());
+
+    // Measure the box off its own top border: from the corner that opens the
+    // titled row to the corner that closes it.
+    let g = draw_grid_app(&app, 120, 40);
+    let title_row = g.iter().find(|l| l.contains("confirm kill")).expect("dialog on screen");
+    let chars: Vec<char> = title_row.chars().collect();
+    let open = chars.iter().position(|&c| c == '╭').expect("dialog's opening corner");
+    let close = chars[open..].iter().position(|&c| c == '╮').expect("dialog's closing corner") + open;
+    let width = close - open + 1;
+    assert!(width <= 66, "a 300-char name stretched the dialog to {width} columns");
+    // And the dashboard behind it must survive. `Processes` is drawn at
+    // column 0, well left of a centred 66-column box, so it is a landmark the
+    // dialog has no business covering.
+    assert!(g.iter().any(|l| l.contains("Processes")), "the dialog ate the whole screen");
+}
+
+#[test]
 fn the_footer_offers_the_dialog_keys_while_a_kill_is_pending() {
     let c = draw_app_at(&demo_pending_kill(Focus::Processes), 120, 40);
     assert!(c.contains("y confirm"), "footer should offer y while pending");

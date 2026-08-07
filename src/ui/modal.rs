@@ -18,6 +18,13 @@ use super::theme;
 const CHROME_ROWS: u16 = 4;
 /// Two columns of padding either side, plus the two borders.
 const CHROME_COLS: u16 = 6;
+/// Widest a dialog may grow before its content is truncated instead.
+///
+/// Content is caller-supplied and some of it is not: `pending_kill` carries a
+/// process name straight from `libproc`, untruncated (the process *table*
+/// truncates to 24 columns, this doesn't). Without a ceiling, one pathological
+/// name stretches the box across the entire terminal.
+const MAX_COLS: u16 = 60;
 
 /// A `w` x `h` rect centred in `area`, clamped so it always fits — a dialog
 /// that would overflow a small terminal is squeezed rather than clipped, so
@@ -35,7 +42,7 @@ pub fn centred(area: Rect, w: u16, h: u16) -> Rect {
 pub fn render(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, accent: Color) {
     let widest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
     // The title sits in the top border, so a long title widens the box too.
-    let content = widest.max(title.chars().count() + 2) as u16;
+    let content = (widest.max(title.chars().count() + 2) as u16).min(MAX_COLS);
     let rect = centred(area, content + CHROME_COLS, lines.len() as u16 + CHROME_ROWS);
 
     // `Clear` is what makes this a dialog rather than an overlay: without it

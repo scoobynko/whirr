@@ -28,7 +28,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     }
     // The old always-on hint row moved to the global footer (see
     // `ui::render_footer`); this status line only exists — and only claims a
-    // row — when there's actually a kill confirmation or message to show.
+    // row — when there's actually a message to show.
+    //
     // The kill confirmation used to live here too, which is why one raised on
     // the localhost card appeared inside this panel. It is a dialog now (see
     // `ui::modal`); this line is left to `message`, which is a status report
