@@ -619,6 +619,18 @@ fn the_terminal_background_setting_stops_whirr_painting_the_frame() {
 }
 
 #[test]
+fn the_background_row_says_why_it_is_unavailable_under_light() {
+    let mut app = demo_settings_open();
+    app.on_key(KeyEvent::from(KeyCode::Right)); // theme -> light
+    let c = draw_app_at(&app, 120, 40);
+    assert!(
+        c.contains("painted (light)"),
+        "the dialog should say the light palette is what forced this, not just show it greyed"
+    );
+    assert!(!c.contains("terminal"), "and must not offer the value it cannot honour");
+}
+
+#[test]
 fn the_settings_dialog_renders_at_every_size_without_panicking() {
     for (w, h) in [(200, 50), (120, 40), (80, 24), (48, 14), (30, 8), (20, 5), (6, 2), (1, 1)] {
         let content = draw_app_at(&demo_settings_open(), w, h);

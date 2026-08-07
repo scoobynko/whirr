@@ -171,7 +171,12 @@ impl App {
         match self.settings_row {
             0 => self.settings.palette = self.settings.palette.next(),
             1 => self.settings.accent = self.settings.accent.next(),
-            2 => self.settings.terminal_bg = !self.settings.terminal_bg,
+            // Inert when the palette forbids it, rather than silently
+            // storing a value the dialog then contradicts.
+            2 if self.settings.terminal_bg_available() => {
+                self.settings.terminal_bg = !self.settings.terminal_bg;
+            }
+            2 => return,
             _ => self.settings.fan = !self.settings.fan,
         }
         self.apply_settings();
@@ -733,6 +738,23 @@ mod tests {
         a.on_key(KeyEvent::from(KeyCode::Down));
         a.on_key(KeyEvent::from(KeyCode::Esc));
         assert_eq!(a.take_settings_save(), None);
+    }
+
+    #[test]
+    fn the_background_row_is_inert_under_the_light_palette() {
+        // Light means dark text; an unpainted frame would put it on whatever
+        // the terminal's background is. The key does nothing rather than
+        // storing a value the dialog then contradicts.
+        let mut a = App::demo();
+        press(&mut a, 's');
+        a.on_key(KeyEvent::from(KeyCode::Right)); // theme -> light
+        let _ = a.take_settings_save();
+        a.on_key(KeyEvent::from(KeyCode::Down));
+        a.on_key(KeyEvent::from(KeyCode::Down)); // -> background
+        a.on_key(KeyEvent::from(KeyCode::Right));
+        assert!(!a.settings.terminal_bg, "the choice must not be taken");
+        assert_eq!(a.take_settings_save(), None, "and nothing to save");
+        assert!(a.theme.paint_bg, "the frame is painted regardless");
     }
 
     #[test]

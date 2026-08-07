@@ -126,6 +126,13 @@ That last one matters if your terminal is themed or translucent — whirr paints
 edge to edge by default, which overrides it. Set **background** to `terminal`
 and the frame is left alone.
 
+It's only offered under the dark palette. Light means dark text, and leaving
+the frame unpainted would put that text straight onto whatever your terminal's
+background is — unreadable on a dark one, and whirr has no reliable way to
+find out which you have. Choosing light shows the row as `painted (light)`;
+your `terminal` preference is kept, not discarded, and comes back when you
+switch to dark.
+
 Changes apply as you make them and are remembered in
 `~/.config/whirr/config.toml` (or `$XDG_CONFIG_HOME/whirr/`):
 
@@ -133,7 +140,7 @@ Changes apply as you make them and are remembered in
 [appearance]
 theme = "dark"        # dark | light
 accent = "teal"       # teal | blue | violet | amber | green
-background = "painted" # painted | terminal
+background = "painted" # painted | terminal (dark palette only)
 
 [behaviour]
 fan = true

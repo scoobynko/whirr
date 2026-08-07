@@ -232,6 +232,18 @@ impl Settings {
         toml::to_string_pretty(&file).unwrap_or_default()
     }
 
+    /// Whether "use the terminal's background" is a choice at all right now.
+    ///
+    /// It isn't under the light palette: light means *dark* text, and leaving
+    /// the frame unpainted would put that text straight onto whatever the
+    /// terminal's own background is. On a dark terminal that is unreadable,
+    /// and whirr has no reliable way to find out which the user has. The dark
+    /// palette has no such problem — its text is light, and the terminals
+    /// people run translucent are overwhelmingly dark.
+    pub fn terminal_bg_available(&self) -> bool {
+        matches!(self.palette, Palette::Dark)
+    }
+
     /// Resolve the choices into the eleven colours the widgets draw with.
     pub fn theme(&self) -> Theme {
         let base = match self.palette {
@@ -249,7 +261,10 @@ impl Settings {
             // `base` keeps its colour even when the frame is left unpainted:
             // it is what `ramp` and `blend` darken toward, and `Color::Reset`
             // there would panic inside `blend` on every frame of the fan.
-            paint_bg: !self.terminal_bg,
+            // Overridden rather than cleared when unavailable: someone who
+            // turned the background off, tried light, and went back to dark
+            // should not have to set it again.
+            paint_bg: !(self.terminal_bg && self.terminal_bg_available()),
             ..base
         }
     }
@@ -334,6 +349,35 @@ mod tests {
         assert_eq!(painted.base, bare.base, "base is the blend anchor, not just a fill");
         assert!(painted.paint_bg && !bare.paint_bg);
         rgb(bare.ramp(bare.accent, 0.5));
+    }
+
+    #[test]
+    fn a_light_palette_always_paints_its_own_background() {
+        // Light means dark text. Leaving the frame unpainted would put that
+        // text on whatever the terminal's background is — unreadable on a
+        // dark one, and whirr has no way to know which it has.
+        let s = Settings { palette: Palette::Light, terminal_bg: true, ..Settings::default() };
+        assert!(s.theme().paint_bg, "a light palette must paint, whatever was asked for");
+        assert!(!s.terminal_bg_available(), "and the dialog must say so");
+    }
+
+    #[test]
+    fn switching_to_light_and_back_keeps_the_background_choice() {
+        // The preference is overridden, not destroyed: someone who turned the
+        // background off, tried light, and went back to dark should not have
+        // to set it again.
+        let mut s = Settings { terminal_bg: true, ..Settings::default() };
+        assert!(!s.theme().paint_bg, "dark honours the choice");
+        s.palette = Palette::Light;
+        assert!(s.theme().paint_bg, "light overrides it");
+        s.palette = Palette::Dark;
+        assert!(!s.theme().paint_bg, "and dark gets it back");
+    }
+
+    #[test]
+    fn the_dark_palette_still_offers_the_terminal_background() {
+        let s = Settings { palette: Palette::Dark, ..Settings::default() };
+        assert!(s.terminal_bg_available());
     }
 
     #[test]

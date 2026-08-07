@@ -82,7 +82,16 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
     let rows: [(&str, String); App::SETTINGS_ROWS] = [
         ("theme", app.settings.palette.label().to_string()),
         ("accent", app.settings.accent.label().to_string()),
-        ("background", if app.settings.terminal_bg { "terminal".into() } else { "painted".into() }),
+        (
+            "background",
+            // Under the light palette this row is inert, and it says so
+            // rather than accepting a keypress that changes nothing.
+            match (app.settings.terminal_bg_available(), app.settings.terminal_bg) {
+                (false, _) => "painted (light)".to_string(),
+                (true, true) => "terminal".to_string(),
+                (true, false) => "painted".to_string(),
+            },
+        ),
         ("fan", if app.settings.fan { "on".into() } else { "off".into() }),
     ];
     // The widest label and value decide the column, so the values line up
@@ -95,7 +104,12 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
         .enumerate()
         .map(|(i, (label, value))| {
             let selected = i == app.settings_row;
-            let (marker, style) = if selected {
+            // An inert row is dimmed even under the cursor: the cursor says
+            // "here", the colour says "nothing to change".
+            let locked = i == 2 && !app.settings.terminal_bg_available();
+            let (marker, style) = if locked {
+                ("  ", Style::default().fg(t.dim))
+            } else if selected {
                 ("› ", Style::default().fg(t.accent).bold())
             } else {
                 ("  ", Style::default().fg(t.text))
@@ -105,7 +119,7 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(format!("{label:<label_w$}   "), style),
                 Span::styled(
                     format!("{value:>value_w$}"),
-                    if selected { style } else { Style::default().fg(t.dim) },
+                    if selected && !locked { style } else { Style::default().fg(t.dim) },
                 ),
             ])
         })
