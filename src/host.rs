@@ -42,6 +42,11 @@ pub struct Host {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Surface {
     pub tty: String,
+    /// The workspace the pane belongs to. `focus-pane` resolves a pane only
+    /// within the current workspace unless told which one to look in, so this
+    /// is not optional context — without it every cross-workspace jump fails
+    /// with "not_found: Pane not found".
+    pub workspace: String,
     /// What the host calls it. Frequently far more useful than a tty — cmux
     /// titles a workspace with the task the session is working on.
     pub title: String,
@@ -159,7 +164,14 @@ fn classify(bundle: &Path) -> HostKind {
 pub fn parse_cmux_tree(text: &str) -> Vec<Surface> {
     let mut out = Vec::new();
     let mut pane = String::new();
+    let mut workspace = String::new();
     for line in text.lines() {
+        if let Some(rest) = after(line, "workspace ") {
+            let r: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+            if !r.is_empty() {
+                workspace = r;
+            }
+        }
         if let Some(rest) = after(line, "pane ") {
             // The ref is whatever follows: a UUID when asked for one, a short
             // `pane:N` otherwise. Both are taken verbatim — whirr never has
@@ -182,7 +194,7 @@ pub fn parse_cmux_tree(text: &str) -> Vec<Surface> {
             .and_then(|(_, r)| r.split_once('"'))
             .map(|(t, _)| t.to_string())
             .unwrap_or_default();
-        out.push(Surface { tty, title, pane: pane.clone() });
+        out.push(Surface { tty, title, pane: pane.clone(), workspace: workspace.clone() });
     }
     out
 }
@@ -218,20 +230,45 @@ pub fn surfaces(host: &Host) -> Vec<Surface> {
 /// Always spawned, never awaited. The AppleScript path in particular can hang
 /// on an unanswered Automation permission prompt — measured at two minutes
 /// before failing — and the dashboard must not be behind it.
-pub fn focus(host: &Host, tty: Option<&str>, surfaces: &[Surface]) {
-    let pane = tty.and_then(|t| surfaces.iter().find(|s| s.tty == t)).map(|s| s.pane.clone());
-    match (&host.kind, pane, tty) {
-        (HostKind::Cmux { cli }, Some(pane), _) => {
-            let _ = Command::new(cli).args(["focus-pane", "--pane", &pane]).spawn();
+pub fn focus(host: &Host, tty: Option<&str>, surfaces: &[Surface]) -> Result<(), String> {
+    let found = tty.and_then(|t| surfaces.iter().find(|s| s.tty == t)).cloned();
+    match (&host.kind, found, tty) {
+        (HostKind::Cmux { cli }, Some(s), _) => {
+            let out = Command::new(cli)
+                .args(["focus-pane", "--pane", &s.pane, "--workspace", &s.workspace])
+                .output();
+            match out {
+                Ok(o) if o.status.success() => Ok(()),
+                Ok(o) => Err(String::from_utf8_lossy(&o.stderr).trim().to_string()),
+                Err(e) => Err(e.to_string()),
+            }
         }
         (HostKind::AppleScript { app }, _, Some(tty)) => {
+            // Spawned, never awaited: this can hang for minutes on an
+            // unanswered Automation prompt. Success cannot be reported
+            // because it is never waited for — say what was attempted.
             let script = applescript_focus(app, tty);
-            let _ = Command::new("osascript").args(["-e", &script]).spawn();
+            match Command::new("osascript").args(["-e", &script]).spawn() {
+                Ok(_) => Ok(()),
+                Err(e) => Err(e.to_string()),
+            }
         }
         // Nothing precise available: bring the application forward. It does
         // not pick the tab, but with one window it is most of the value.
+        // Nothing precise available: bring the application forward. Works for
+        // terminals nobody has written an adapter for — but if whirr is
+        // running inside that same app it looks like nothing happened, which
+        // is why the caller reports what was done.
         _ => {
-            let _ = Command::new("open").arg("-a").arg(&host.bundle).spawn();
+            let name = host
+                .bundle
+                .file_stem()
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "the terminal".into());
+            match Command::new("open").arg("-a").arg(&host.bundle).spawn() {
+                Ok(_) => Err(format!("{name} has no way to select a tab — brought it to the front")),
+                Err(e) => Err(e.to_string()),
+            }
         }
     }
 }
@@ -298,6 +335,7 @@ mod tests {
             tty: "ttys011".into(),
             title: "…/Documents/Projects/axterio".into(),
             pane: "pane:1".into(),
+            workspace: "workspace:1".into(),
         });
     }
 
@@ -318,6 +356,18 @@ mod tests {
 │   └── pane 631A76B5-FCA4-403C-A182-BD65976F018A [focused]
 │       └── surface 63ECCA0C-6DAD-4A22-9C63-5C15DE4EE734 [terminal] "…/Projects/axterio" [selected] tty=ttys011
 "#;
+
+    #[test]
+    fn a_surface_carries_the_workspace_that_scopes_its_pane() {
+        // `focus-pane` resolves a pane only inside the current workspace
+        // unless told which one to look in. Without this every jump to a
+        // session in another workspace failed with "Pane not found" — which
+        // is most of them.
+        let s = parse_cmux_tree(TREE);
+        assert_eq!(s[0].workspace, "workspace:1");
+        assert_eq!(s[1].workspace, "workspace:3", "the second workspace, not the first");
+        assert_eq!(s[2].workspace, "workspace:3");
+    }
 
     #[test]
     fn a_uuid_pane_ref_is_carried_through_verbatim() {

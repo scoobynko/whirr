@@ -344,6 +344,10 @@ impl App {
             }
             Snapshot::Slow(s) => self.slow = Some(s),
             Snapshot::Update(u) => self.update = Some(u),
+            Snapshot::Notice(text) => {
+                self.message = Some(text);
+                self.dirty = true;
+            }
         }
         self.dirty = true;
     }

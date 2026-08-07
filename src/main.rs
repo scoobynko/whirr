@@ -150,7 +150,9 @@ fn main() -> io::Result<()> {
         // a captive-portal network, and the dashboard must not wait for it.
         whirr::update::spawn(tx.clone());
     }
-    sampler::spawn_samplers(tx);
+    // Kept for the background actions below: the samplers take a clone, not
+    // the original, so the event loop can still send on it.
+    sampler::spawn_samplers(tx.clone());
 
     let mut app = App::new(no_fan);
     app.load_settings(no_fan);
@@ -185,10 +187,21 @@ fn main() -> io::Result<()> {
                     // whole process table, and the AppleScript path can hang
                     // for minutes on an unanswered permission prompt.
                     if let Some((pid, tty)) = app.take_focus_request() {
+                        let tx = tx.clone();
                         std::thread::spawn(move || {
-                            if let Some(host) = whirr::host::detect(pid) {
-                                let surfaces = whirr::host::surfaces(&host);
-                                whirr::host::focus(&host, tty.as_deref(), &surfaces);
+                            // Anything other than a clean jump is reported.
+                            // The fallback rung activates an app the user is
+                            // often already inside, which is indistinguishable
+                            // from nothing happening unless whirr says so.
+                            let problem = match whirr::host::detect(pid) {
+                                Some(host) => {
+                                    let surfaces = whirr::host::surfaces(&host);
+                                    whirr::host::focus(&host, tty.as_deref(), &surfaces).err()
+                                }
+                                None => Some("couldn't tell which terminal that session is in".into()),
+                            };
+                            if let Some(text) = problem {
+                                let _ = tx.send(whirr::sampler::Snapshot::Notice(text));
                             }
                         });
                     }

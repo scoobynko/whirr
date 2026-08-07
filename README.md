@@ -107,6 +107,12 @@ apart. Everywhere else nothing changes.
 The first jump on Terminal.app or iTerm2 will ask macOS for Automation
 permission. Denying it costs the precise-tab jump, nothing else.
 
+Tab-level precision can only ever be per-terminal: macOS has no general
+"focus the tab attached to this tty" — each terminal owns its tab model
+privately. Bringing the application forward *is* general, so that's what every
+unrecognised terminal gets, and whirr says so in the status line rather than
+appearing to do nothing.
+
 A process often listens on more than one port, so `o` opens straight away only
 when there's one sensible candidate; otherwise it asks which. Ports the OS
 allocated itself (49152 and above) are never offered — they're not pages
