@@ -34,6 +34,10 @@ OPTIONS:
     -h, --help       Print this help and exit
     -V, --version    Print the version and exit
         --no-fan     Don't animate the burst fan in the header
+        --no-update-check
+                     Don't check crates.io for a newer release. This is the
+                     only network request whirr makes; it happens at most
+                     once a day and never blocks the dashboard
         --list-sensors
                      Dump the HID temperature sensors and IOReport Energy
                      Model channels this Mac exposes, then exit
@@ -56,12 +60,13 @@ enum Mode {
     Print(String),
     /// Dump sensor diagnostics and exit.
     ListSensors,
-    /// Run the dashboard. `no_fan` suppresses the header animation.
-    Run { no_fan: bool },
+    /// Run the dashboard. `no_fan` suppresses the header animation;
+    /// `no_update_check` suppresses whirr's only network call.
+    Run { no_fan: bool, no_update_check: bool },
 }
 
 fn parse_args(args: impl Iterator<Item = String>) -> Mode {
-    let (mut no_fan, mut list_sensors) = (false, false);
+    let (mut no_fan, mut list_sensors, mut no_update_check) = (false, false, false);
     for arg in args {
         match arg.as_str() {
             // --help and --version outrank every other mode: a user asking
@@ -75,6 +80,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Mode {
             }
             "--list-sensors" => list_sensors = true,
             "--no-fan" => no_fan = true,
+            "--no-update-check" => no_update_check = true,
             // Unknown arguments are ignored rather than fatal: this is a
             // dashboard with four flags, not a CLI with a grammar to enforce.
             _ => {}
@@ -83,7 +89,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> Mode {
     if list_sensors {
         Mode::ListSensors
     } else {
-        Mode::Run { no_fan }
+        Mode::Run { no_fan, no_update_check }
     }
 }
 
@@ -113,7 +119,7 @@ fn main() -> io::Result<()> {
         libc::signal(libc::SIGPIPE, libc::SIG_DFL);
     }
 
-    let no_fan = match parse_args(std::env::args().skip(1)) {
+    let (no_fan, no_update_check) = match parse_args(std::env::args().skip(1)) {
         Mode::Print(text) => {
             println!("{text}");
             return Ok(());
@@ -122,7 +128,7 @@ fn main() -> io::Result<()> {
             list_sensors();
             return Ok(());
         }
-        Mode::Run { no_fan } => no_fan,
+        Mode::Run { no_fan, no_update_check } => (no_fan, no_update_check),
     };
 
     let default_hook = std::panic::take_hook();
@@ -137,6 +143,11 @@ fn main() -> io::Result<()> {
     let mut terminal = Terminal::new(CrosstermBackend::new(io::stdout()))?;
 
     let (tx, rx) = std::sync::mpsc::channel();
+    if !no_update_check {
+        // Spawned, never awaited: the first thing it may do is a DNS lookup on
+        // a captive-portal network, and the dashboard must not wait for it.
+        whirr::update::spawn(tx.clone());
+    }
     sampler::spawn_samplers(tx);
 
     let mut app = App::new(no_fan);
@@ -196,15 +207,30 @@ mod tests {
 
     #[test]
     fn no_arguments_runs_the_dashboard_with_the_fan() {
-        assert!(matches!(parse(&[]), Mode::Run { no_fan: false }));
+        assert!(matches!(parse(&[]), Mode::Run { no_fan: false, .. }));
     }
 
     #[test]
     fn no_fan_is_recognised_in_both_positions() {
-        assert!(matches!(parse(&["--no-fan"]), Mode::Run { no_fan: true }));
+        assert!(matches!(parse(&["--no-fan"]), Mode::Run { no_fan: true, .. }));
         // Unknown arguments are ignored rather than fatal, so a flag after one
         // must still be seen.
-        assert!(matches!(parse(&["--wat", "--no-fan"]), Mode::Run { no_fan: true }));
+        assert!(matches!(parse(&["--wat", "--no-fan"]), Mode::Run { no_fan: true, .. }));
+    }
+
+    #[test]
+    fn the_update_check_is_on_unless_it_is_turned_off() {
+        assert!(matches!(parse(&[]), Mode::Run { no_update_check: false, .. }));
+        assert!(
+            matches!(parse(&["--no-update-check"]), Mode::Run { no_update_check: true, .. }),
+            "the one network call whirr makes has to be refusable"
+        );
+    }
+
+    #[test]
+    fn the_two_run_flags_are_independent() {
+        let m = parse(&["--no-fan", "--no-update-check"]);
+        assert!(matches!(m, Mode::Run { no_fan: true, no_update_check: true }));
     }
 
     #[test]

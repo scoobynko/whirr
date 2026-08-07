@@ -75,6 +75,10 @@ pub struct App {
     /// `selected()`, which clamps against the focused panel's current length,
     /// so a panel that shrinks under its own cursor needs no separate fixup.
     selected: [usize; Focus::ALL.len()],
+    /// A newer release, once the update check has found one. `None` until
+    /// then, and `None` forever when the check is off or the network is not
+    /// there — the dashboard never waits on it.
+    pub update: Option<crate::update::Update>,
     pub pending_kill: Option<(i32, String)>,
     /// The open action waiting on "which port?". Set only when a row offers
     /// more than one browsable port — see `PortPick`.
@@ -109,6 +113,7 @@ impl App {
             focus: Focus::Processes,
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
+            update: None,
             pending_kill: None,
             pending_port_pick: None,
             open_request: None,
@@ -251,6 +256,7 @@ impl App {
                 self.medium = Some(m);
             }
             Snapshot::Slow(s) => self.slow = Some(s),
+            Snapshot::Update(u) => self.update = Some(u),
         }
         self.dirty = true;
     }

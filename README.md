@@ -99,6 +99,21 @@ whirr asks rather than guessing.
 | `-V`, `--version` | print the version and exit |
 | `--no-fan` | disable the fan animation; the UI then only redraws on new data, a keypress, or a resize — useful on battery or over a slow SSH link |
 | `--list-sensors` | print the raw HID temperature sensors and IOReport Energy Model channels this Mac exposes, then exit (no TTY needed) |
+| `--no-update-check` | don't ask crates.io whether a newer release exists |
+
+## The one network request
+
+Everything on the dashboard is read locally. The single exception is a version
+check: once a day at most, whirr asks crates.io for the latest published
+version and, if it's newer than the one running, says so in the footer along
+with the command that upgrades *your* installation — Homebrew, cargo, or the
+installer script, inferred from where the binary lives.
+
+It sends nothing but a `User-Agent` identifying whirr and its version (which
+crates.io requires), it runs on its own thread so it can never delay startup
+or a redraw, and the answer is cached in
+`~/.cache/whirr/update-check`. Turn it off with `--no-update-check`, and
+whirr makes no network requests at all.
 
 ## Performance budget
 

@@ -243,5 +243,23 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         Some("q quit"),
     ];
     let text = items.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    let keys_width = text.chars().count();
     f.render_widget(Paragraph::new(text).style(Style::default().fg(theme::DIM)), area);
+
+    // The update notice shares this row, right-aligned, and only when it can
+    // do so without touching the keys. The keys are the working UI; a notice
+    // nobody asked for does not get to push them off the screen.
+    if let Some(update) = &app.update {
+        let notice = format!("↻ {} available · {}", update.latest, update.hint);
+        let width = notice.chars().count();
+        // One column of breathing room between the two.
+        if area.width as usize >= keys_width + width + 2 {
+            f.render_widget(
+                Paragraph::new(notice)
+                    .style(Style::default().fg(theme::AMBER))
+                    .alignment(Alignment::Right),
+                area,
+            );
+        }
+    }
 }
