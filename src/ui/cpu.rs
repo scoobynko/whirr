@@ -1,13 +1,13 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use super::{font, gauge, theme};
+use super::{font, gauge};
 use crate::app::App;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let inner = gauge::frame(f, area, "CPU");
+    let inner = gauge::frame(f, area, &app.theme, "CPU");
     let Some(fast) = app.fast.as_ref() else {
-        return gauge::unavailable(f, inner);
+        return gauge::unavailable(f, inner, &app.theme);
     };
 
     if font::hero_fits(inner) {
@@ -31,7 +31,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         // changes.
         let precise = format!("{:.0}%", fast.total_cpu);
         let coarse = format!("{:.0}", fast.total_cpu);
-        gauge::hero(f, rows[0], &precise, &coarse, theme::ACCENT);
+        gauge::hero(f, rows[0], &precise, &coarse, app.theme.accent);
         render_history(f, rows[1], app);
     } else {
         // The compact tier used to spend its top 3 rows on a numbered per-core
@@ -41,7 +41,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         render_history(f, inner, app);
         let label = Line::from(Span::styled(
             format!("{:>3.0}%", fast.total_cpu),
-            Style::default().fg(theme::ACCENT).bold(),
+            Style::default().fg(app.theme.accent).bold(),
         ))
         .right_aligned();
         f.render_widget(Paragraph::new(label), Rect { height: 1, ..inner });
@@ -50,11 +50,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 
 fn render_history(f: &mut Frame, area: Rect, app: &App) {
     let data: Vec<u64> = app.cpu_hist.iter().map(|v| v.round() as u64).collect();
-    super::spark::render(f, area, &data, 100, Style::default().fg(theme::ACCENT));
+    super::spark::render(f, area, &app.theme, &data, 100, Style::default().fg(app.theme.accent));
 }
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
@@ -87,7 +91,7 @@ mod tests {
         // than looking for glyph characters in the rendered text.
         let full = draw(40, 12);
         let buf = draw_buffer(40, 12);
-        let filled = buf.content().iter().filter(|c| c.style().bg == Some(super::theme::ACCENT)).count();
+        let filled = buf.content().iter().filter(|c| c.style().bg == Some(TH.accent)).count();
         let expected: usize =
             crate::ui::font::big_text("41%").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
         assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"41%\"");
@@ -118,7 +122,7 @@ mod tests {
         let x = buf.area.width - 2;
         assert_eq!(
             buf[(x, 6)].bg,
-            super::theme::ACCENT,
+            TH.accent,
             "a 100% sample should fill the reclaimed row y=6; chart did not grow into it"
         );
     }
@@ -134,7 +138,7 @@ mod tests {
         assert!(!compact.contains(" P "), "per-core E/P labels should be gone");
         assert!(compact.contains("41%"), "compact tier should still label the current total");
         let buf = draw_buffer(40, 10);
-        let filled = buf.content().iter().any(|c| c.style().bg == Some(super::theme::ACCENT));
+        let filled = buf.content().iter().any(|c| c.style().bg == Some(TH.accent));
         assert!(!filled, "compact tier must not paint any hero bitmap pixels");
     }
 

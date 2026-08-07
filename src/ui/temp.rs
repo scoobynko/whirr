@@ -1,14 +1,14 @@
 use ratatui::prelude::*;
 
 use crate::app::App;
-use super::{font, gauge, theme};
+use super::{font, gauge};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let inner = gauge::frame(f, area, "Temp");
+    let inner = gauge::frame(f, area, &app.theme, "Temp");
     let Some(t) = app.medium.as_ref().and_then(|m| m.temp_c) else {
-        return gauge::unavailable(f, inner);
+        return gauge::unavailable(f, inner, &app.theme);
     };
-    let color = theme::temp_color(t);
+    let color = app.theme.temp_color(t);
 
     // A 3-column vertical thermometer (`▐█▌` per row, a `●` bulb at the
     // bottom) used to sit to the left of the compact reading. Dropped: it
@@ -35,11 +35,15 @@ fn render_chart(f: &mut Frame, area: Rect, app: &App, color: Color) {
         .iter()
         .map(|v| (v - 30.0).clamp(0.0, 75.0).round() as u64)
         .collect();
-    super::spark::render(f, area, &data, 75, Style::default().fg(color));
+    super::spark::render(f, area, &app.theme, &data, 75, Style::default().fg(color));
 }
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::style::Color;
@@ -76,7 +80,7 @@ mod tests {
         // against the same bitmap `hero_lines` was built from, rather than
         // grepping the rendered text for glyph characters.
         let app = App::demo();
-        let color = super::theme::temp_color(88.0);
+        let color = TH.temp_color(88.0);
         let buf = draw_buffer(40, 12, &app);
         // The card's border occupies row 0, so the hero rows start at y=1,
         // not y=0 — scan every row and require each expected bitmap row to
@@ -128,7 +132,7 @@ mod tests {
         // row (23 cols) does fit and must appear intact.
         let mut app = App::demo();
         app.medium.as_mut().unwrap().temp_c = Some(1000.4);
-        let color = super::theme::temp_color(1000.4);
+        let color = TH.temp_color(1000.4);
         let buf = draw_buffer(30, 12, &app);
         // Sample the same 4 hero rows as bg-colour bitmaps rather than
         // grepping rendered text: filled hero pixels carry `color` as their
@@ -156,7 +160,7 @@ mod tests {
         for v in [35.0_f32, 50.0, 70.0, 85.0, 100.0] {
             app.temp_hist.push(v);
         }
-        t.draw(|f| super::render_chart(f, f.area(), &app, super::theme::TEXT)).unwrap();
+        t.draw(|f| super::render_chart(f, f.area(), &app, TH.text)).unwrap();
         let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         // baseline-shift (v-30).clamp(0,75), then level = shifted*8/75:
         // 35→5→0(' '), 50→20→2(▂), 70→40→4(▄), 85→55→5(▅), 100→70(clamped 75 cap)→7(▇)

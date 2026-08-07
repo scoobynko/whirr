@@ -5,20 +5,20 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use super::theme;
+
 use crate::app::{App, Focus};
 use crate::sampler::sessions::ClaudeSession;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let focused = matches!(app.focus, Focus::Sessions);
-    let block = theme::panel_block("claude sessions", focused);
+    let block = app.theme.panel_block("claude sessions", focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let sessions = app.sessions();
     if sessions.is_empty() {
         f.render_widget(
-            Paragraph::new("none running").style(Style::default().fg(theme::DIM)),
+            Paragraph::new("none running").style(Style::default().fg(app.theme.dim)),
             inner,
         );
         return;
@@ -56,9 +56,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         .map(|(i, s)| {
             let selected = cursor == Some(i);
             let base = if selected {
-                Style::default().fg(theme::BG_CELL).bg(theme::ACCENT)
+                Style::default().fg(app.theme.bg_cell).bg(app.theme.accent)
             } else {
-                Style::default().fg(theme::TEXT)
+                Style::default().fg(app.theme.text)
             };
             let cpu = match app.cpu_of(s.pid) {
                 Some(c) => format!("{c:>5.1}%"),
@@ -75,11 +75,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                         true => format!("{:<w$}", s.tty.as_deref().unwrap_or("—"), w = tty_w),
                         false => " ".repeat(tty_w),
                     },
-                    if selected { base } else { Style::default().fg(theme::DIM) },
+                    if selected { base } else { Style::default().fg(app.theme.dim) },
                 ),
                 Span::styled(
                     cpu,
-                    if selected { base } else { Style::default().fg(theme::ACCENT) },
+                    if selected { base } else { Style::default().fg(app.theme.accent) },
                 ),
             ])
         })

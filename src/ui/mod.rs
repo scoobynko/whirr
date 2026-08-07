@@ -37,7 +37,7 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Block fills its full area's background via Buffer::set_style, which
     // only patches the bg channel — later fg-only styles (most widgets here)
     // leave this bg untouched.
-    f.render_widget(Block::default().style(Style::default().bg(theme::BASE)), area);
+    f.render_widget(Block::default().style(Style::default().bg(app.theme.base)), area);
 
     let screen = Screen::resolve(area);
     let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
@@ -58,9 +58,9 @@ pub fn draw(f: &mut Frame, app: &App) {
     // the target came from — a confirmation raised on the localhost card used
     // to appear inside the Processes box two panels away.
     if let Some((pid, name)) = &app.pending_kill {
-        render_kill_dialog(f, area, *pid, name);
+        render_kill_dialog(f, area, &app.theme, *pid, name);
     } else if let Some(pick) = &app.pending_port_pick {
-        render_port_picker(f, area, pick);
+        render_port_picker(f, area, &app.theme, pick);
     }
 }
 
@@ -69,43 +69,43 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// instead of Storybook.
 ///
 /// Accented rather than red: nothing here is destructive.
-fn render_port_picker(f: &mut Frame, area: Rect, pick: &crate::app::PortPick) {
+fn render_port_picker(f: &mut Frame, area: Rect, theme: &theme::Theme, pick: &crate::app::PortPick) {
     let mut lines = vec![
-        Line::styled(pick.label.clone(), Style::default().fg(theme::TEXT).bold()),
+        Line::styled(pick.label.clone(), Style::default().fg(theme.text).bold()),
         Line::from(""),
     ];
     for (i, port) in pick.ports.iter().enumerate() {
         lines.push(Line::from(vec![
             // The digit that opens it, next to what it opens.
-            Span::styled(format!("{}", i + 1), Style::default().fg(theme::ACCENT).bold()),
-            Span::styled(format!("  :{port}"), Style::default().fg(theme::TEXT)),
+            Span::styled(format!("{}", i + 1), Style::default().fg(theme.accent).bold()),
+            Span::styled(format!("  :{port}"), Style::default().fg(theme.text)),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-        Span::styled(" cancel", Style::default().fg(theme::DIM)),
+        Span::styled("n", Style::default().fg(theme.text).bold()),
+        Span::styled(" cancel", Style::default().fg(theme.dim)),
     ]));
-    modal::render(f, area, "open which port?", lines, theme::ACCENT);
+    modal::render(f, area, theme, "open which port?", lines, theme.accent);
 }
 
 /// "You are about to send SIGTERM to this" — the one irreversible thing whirr
 /// does, so it gets the red accent and spells out both what dies and how to
 /// back out.
-fn render_kill_dialog(f: &mut Frame, area: Rect, pid: i32, name: &str) {
+fn render_kill_dialog(f: &mut Frame, area: Rect, theme: &theme::Theme, pid: i32, name: &str) {
     let lines = vec![
-        Line::styled(name.to_string(), Style::default().fg(theme::TEXT).bold()),
-        Line::styled(format!("pid {pid}"), Style::default().fg(theme::DIM)),
+        Line::styled(name.to_string(), Style::default().fg(theme.text).bold()),
+        Line::styled(format!("pid {pid}"), Style::default().fg(theme.dim)),
         Line::from(""),
         Line::from(vec![
-            Span::styled("y", Style::default().fg(theme::RED).bold()),
-            Span::styled(" confirm", Style::default().fg(theme::TEXT)),
+            Span::styled("y", Style::default().fg(theme.red).bold()),
+            Span::styled(" confirm", Style::default().fg(theme.text)),
             Span::styled("   ", Style::default()),
-            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT)),
+            Span::styled("n", Style::default().fg(theme.text).bold()),
+            Span::styled(" cancel", Style::default().fg(theme.text)),
         ]),
     ];
-    modal::render(f, area, "confirm kill", lines, theme::RED);
+    modal::render(f, area, theme, "confirm kill", lines, theme.red);
 }
 
 /// The gauge band. `Tier::Grid` stacks the four cards 2x2 — `Screen` only
@@ -210,10 +210,10 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     // would be a lie. The footer becomes the dialog's own key legend.
     if app.pending_kill.is_some() {
         let text = Line::from(vec![
-            Span::styled("y", Style::default().fg(theme::RED).bold()),
-            Span::styled(" confirm · ", Style::default().fg(theme::DIM)),
-            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-            Span::styled(" cancel", Style::default().fg(theme::DIM)),
+            Span::styled("y", Style::default().fg(app.theme.red).bold()),
+            Span::styled(" confirm · ", Style::default().fg(app.theme.dim)),
+            Span::styled("n", Style::default().fg(app.theme.text).bold()),
+            Span::styled(" cancel", Style::default().fg(app.theme.dim)),
         ]);
         f.render_widget(Paragraph::new(text), area);
         return;
@@ -222,11 +222,11 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         let text = Line::from(vec![
             Span::styled(
                 format!("1-{}", pick.ports.len()),
-                Style::default().fg(theme::ACCENT).bold(),
+                Style::default().fg(app.theme.accent).bold(),
             ),
-            Span::styled(" open · ", Style::default().fg(theme::DIM)),
-            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-            Span::styled(" cancel", Style::default().fg(theme::DIM)),
+            Span::styled(" open · ", Style::default().fg(app.theme.dim)),
+            Span::styled("n", Style::default().fg(app.theme.text).bold()),
+            Span::styled(" cancel", Style::default().fg(app.theme.dim)),
         ]);
         f.render_widget(Paragraph::new(text), area);
         return;
@@ -244,7 +244,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     ];
     let text = items.into_iter().flatten().collect::<Vec<_>>().join(" · ");
     let keys_width = text.chars().count();
-    f.render_widget(Paragraph::new(text).style(Style::default().fg(theme::DIM)), area);
+    f.render_widget(Paragraph::new(text).style(Style::default().fg(app.theme.dim)), area);
 
     // The update notice shares this row, right-aligned, and only when it can
     // do so without touching the keys. The keys are the working UI; a notice
@@ -256,7 +256,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         if area.width as usize >= keys_width + width + 2 {
             f.render_widget(
                 Paragraph::new(notice)
-                    .style(Style::default().fg(theme::AMBER))
+                    .style(Style::default().fg(app.theme.amber))
                     .alignment(Alignment::Right),
                 area,
             );

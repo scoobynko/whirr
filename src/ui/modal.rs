@@ -39,7 +39,14 @@ pub fn centred(area: Rect, w: u16, h: u16) -> Rect {
 ///
 /// `accent` colours the border and title: the caller decides how alarming the
 /// dialog looks, because "confirm a kill" and "pick a port" should not.
-pub fn render(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, accent: Color) {
+pub fn render(
+    f: &mut Frame,
+    area: Rect,
+    theme: &theme::Theme,
+    title: &str,
+    lines: Vec<Line>,
+    accent: Color,
+) {
     let widest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
     // The title sits in the top border, so a long title widens the box too.
     let content = (widest.max(title.chars().count() + 2) as u16).min(MAX_COLS);
@@ -52,7 +59,7 @@ pub fn render(f: &mut Frame, area: Rect, title: &str, lines: Vec<Line>, accent: 
         .borders(Borders::ALL)
         .border_type(BorderType::Rounded)
         .border_style(Style::default().fg(accent))
-        .style(Style::default().bg(theme::BG_MODAL))
+        .style(Style::default().bg(theme.bg_modal))
         .title(format!(" {title} "))
         .title_style(Style::default().fg(accent).bold());
     let inner = block.inner(rect);

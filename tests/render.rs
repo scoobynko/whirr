@@ -4,7 +4,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use whirr::app::{App, Focus};
 use whirr::sampler::ProcInfo;
 use whirr::ui;
-use whirr::ui::theme;
+use whirr::ui::theme::Theme;
 use whirr::update::Update;
 
 fn draw_at(w: u16, h: u16) -> String {
@@ -52,7 +52,7 @@ fn row_of(lines: &[String], needle: &str) -> usize {
     lines.iter().position(|l| l.contains(needle)).unwrap_or_else(|| panic!("{needle:?} not found"))
 }
 
-/// The frame paints `theme::BASE` across itself before anything else
+/// The frame paints `Theme::dark().base` across itself before anything else
 /// renders, so a widget that only sets a foreground (borders, titles, plain
 /// text — the vast majority of the UI) must still composite on a `BASE`
 /// background rather than the terminal's default. Sampled at a genuinely
@@ -66,7 +66,7 @@ fn frame_background_is_base_at_sampled_positions() {
     let buf = terminal.backend().buffer().clone();
 
     // Top-left corner: outside every panel, genuinely empty screen space.
-    assert_eq!(buf[(0, 0)].bg, theme::BASE, "empty top-left corner should carry the base background");
+    assert_eq!(buf[(0, 0)].bg, Theme::dark().base, "empty top-left corner should carry the base background");
 
     let lines: Vec<String> = (0..buf.area.height)
         .map(|y| (0..buf.area.width).map(|x| buf[(x, y)].symbol().to_string()).collect::<String>())
@@ -78,7 +78,7 @@ fn frame_background_is_base_at_sampled_positions() {
     let cpu_row = lines.iter().position(|l| l.contains("CPU")).expect("CPU card present");
     let border_x = lines[cpu_row].find(|c: char| c != ' ').expect("border corner present on CPU's title row");
     assert_eq!(
-        buf[(border_x as u16, cpu_row as u16)].bg, theme::BASE,
+        buf[(border_x as u16, cpu_row as u16)].bg, Theme::dark().base,
         "CPU card's border cell should keep the base background under its fg-only border style"
     );
 
@@ -88,7 +88,7 @@ fn frame_background_is_base_at_sampled_positions() {
     let processes_row = lines.iter().position(|l| l.contains("Processes")).expect("Processes card present");
     let body_y = (processes_row + 2) as u16; // row 0 (title+1) is index 0, the default-selected row
     assert_eq!(
-        buf[(2, body_y)].bg, theme::BASE,
+        buf[(2, body_y)].bg, Theme::dark().base,
         "plain process row text should keep the base background, not Reset"
     );
 }
@@ -242,7 +242,7 @@ fn full_tier_shows_hero_font_and_burst_fan() {
     // the "WHIRR" bitmap exactly.
     let wordmark_filled = (0..buf.area.width)
         .flat_map(|x| (0..9u16).map(move |y| (x, y)))
-        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(theme::ACCENT))
+        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(Theme::dark().accent))
         .count();
     let wordmark_expected: usize =
         whirr::ui::font::big_text("WHIRR").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
@@ -259,7 +259,7 @@ fn full_tier_shows_hero_font_and_burst_fan() {
         whirr::ui::font::big_text("7.9 W").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
     let accent_filled_below_header = (0..buf.area.width)
         .flat_map(|x| (9..buf.area.height).map(move |y| (x, y)))
-        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(theme::ACCENT))
+        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(Theme::dark().accent))
         .count();
     assert_eq!(
         accent_filled_below_header,
@@ -284,7 +284,7 @@ fn compact_tier_shares_the_brand_assets_but_not_the_hero_numbers() {
     // The only ACCENT-backed bitmap at this size is the header wordmark: the
     // gauge cards are below the hero threshold, so none of them paint one.
     let buf = draw_buffer_at(&app, 80, 24);
-    let accent_cells = buf.content().iter().filter(|c| c.style().bg == Some(theme::ACCENT)).count();
+    let accent_cells = buf.content().iter().filter(|c| c.style().bg == Some(Theme::dark().accent)).count();
     let wordmark: usize =
         whirr::ui::font::big_text("WHIRR").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
     assert_eq!(accent_cells, wordmark, "compact tier should paint the wordmark bitmap and no hero numbers");
@@ -734,13 +734,13 @@ fn selected_process_row_highlight_is_contiguous_across_its_bars() {
         .expect("demo's top process row should be on screen") as u16;
 
     let highlighted: Vec<u16> = (0..buf.area.width)
-        .filter(|&x| buf[(x, y)].style().bg == Some(theme::BG_CELL))
+        .filter(|&x| buf[(x, y)].style().bg == Some(Theme::dark().bg_cell))
         .collect();
     assert!(!highlighted.is_empty(), "selected row should be highlighted at all");
 
     let (first, last) = (highlighted[0], *highlighted.last().unwrap());
     let gaps: Vec<(u16, String, Option<ratatui::style::Color>)> = (first..=last)
-        .filter(|&x| buf[(x, y)].style().bg != Some(theme::BG_CELL))
+        .filter(|&x| buf[(x, y)].style().bg != Some(Theme::dark().bg_cell))
         .map(|x| (x, buf[(x, y)].symbol().to_string(), buf[(x, y)].style().bg))
         .collect();
     assert!(
@@ -754,7 +754,7 @@ fn selected_process_row_highlight_is_contiguous_across_its_bars() {
     // covered.
     let unhighlighted_bars: Vec<u16> = (0..buf.area.width)
         .filter(|&x| matches!(buf[(x, y)].symbol(), "▮" | "▯"))
-        .filter(|&x| buf[(x, y)].style().bg != Some(theme::BG_CELL))
+        .filter(|&x| buf[(x, y)].style().bg != Some(Theme::dark().bg_cell))
         .collect();
     assert!(
         unhighlighted_bars.is_empty(),
@@ -824,7 +824,7 @@ fn narrow_but_tall_gets_the_hero_design_in_a_two_by_two_grid() {
     let buf = draw_buffer_at(&app, 103, 45);
     let hero_cells = (0..buf.area.width)
         .flat_map(|x| (9..21u16).map(move |y| (x, y)))
-        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(theme::ACCENT))
+        .filter(|&(x, y)| buf[(x, y)].style().bg == Some(Theme::dark().accent))
         .count();
     let expected: usize =
         whirr::ui::font::big_text("41%").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();

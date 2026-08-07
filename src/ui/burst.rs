@@ -105,7 +105,7 @@ fn sample(x: f32, y: f32, rad: f32, angle_deg: f32) -> Option<usize> {
 const DOTS: [[u8; 2]; 4] = [[0x01, 0x08], [0x02, 0x10], [0x04, 0x20], [0x40, 0x80]];
 
 /// One frame, as `h` lines of `w` spans. Empty cells are plain spaces.
-pub fn render(w: u16, h: u16, angle_deg: f32) -> Vec<Line<'static>> {
+pub fn render(w: u16, h: u16, theme: &super::theme::Theme, angle_deg: f32) -> Vec<Line<'static>> {
     let g = coverage(w, h, angle_deg);
     (0..h as usize)
         .map(|cy| {
@@ -140,19 +140,19 @@ pub fn render(w: u16, h: u16, angle_deg: f32) -> Vec<Line<'static>> {
                             return Span::raw(" ");
                         }
                         let tone =
-                            if halo_votes[0] >= halo_votes[1] { theme::TEXT } else { theme::ACCENT };
+                            if halo_votes[0] >= halo_votes[1] { theme.text } else { theme.accent };
                         let ch = char::from_u32(0x2800 + u32::from(halo_bits)).unwrap();
                         return Span::styled(
                             ch.to_string(),
-                            Style::default().fg(theme::blend(theme::BG_CELL, tone, HALO_BRIGHT)),
+                            Style::default().fg(theme::blend(theme.bg_cell, tone, HALO_BRIGHT)),
                         );
                     }
-                    let tone = if votes[0] >= votes[1] { theme::TEXT } else { theme::ACCENT };
+                    let tone = if votes[0] >= votes[1] { theme.text } else { theme.accent };
                     let bright = (sum / lit as f32).clamp(MIN_BRIGHT, 1.0);
                     let ch = char::from_u32(0x2800 + u32::from(bits)).unwrap();
                     Span::styled(
                         ch.to_string(),
-                        Style::default().fg(theme::blend(theme::BG_CELL, tone, bright)),
+                        Style::default().fg(theme::blend(theme.bg_cell, tone, bright)),
                     )
                 })
                 .collect();
@@ -163,8 +163,12 @@ pub fn render(w: u16, h: u16, angle_deg: f32) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 pub(crate) mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use super::*;
-    use crate::ui::theme;
+
 
     const W: u16 = 21;
     const H: u16 = 9;
@@ -333,7 +337,7 @@ pub(crate) mod tests {
             Color::Rgb(r, g, b) => [f32::from(r), f32::from(g), f32::from(b)],
             other => panic!("expected Color::Rgb, got {other:?}"),
         };
-        let (bg, to, f) = (ch(theme::BG_CELL), ch(tone), ch(fg));
+        let (bg, to, f) = (ch(TH.bg_cell), ch(tone), ch(fg));
         let widest = (0..3)
             .max_by(|a, b| (to[*a] - bg[*a]).abs().total_cmp(&(to[*b] - bg[*b]).abs()))
             .unwrap();
@@ -349,7 +353,7 @@ pub(crate) mod tests {
 
     #[test]
     fn rays_alternate_the_two_brand_tones() {
-        let lines = render(W, H, 0.0);
+        let lines = render(W, H, &TH, 0.0);
         assert_eq!(lines.len(), H as usize);
         let (mut saw_text, mut saw_accent) = (false, false);
         for line in &lines {
@@ -358,9 +362,9 @@ pub(crate) mod tests {
                     continue;
                 }
                 let fg = span.style.fg.unwrap();
-                if is_blend_of(fg, theme::TEXT) {
+                if is_blend_of(fg, TH.text) {
                     saw_text = true;
-                } else if is_blend_of(fg, theme::ACCENT) {
+                } else if is_blend_of(fg, TH.accent) {
                     saw_accent = true;
                 } else {
                     panic!("off-brand colour {fg:?}");
@@ -376,7 +380,7 @@ pub(crate) mod tests {
     /// (2 dots wide, 4 dots tall) rather than a single dot, so the rendered
     /// `Span`'s foreground can be read back.
     fn cell_tone(w: u16, h: u16, angle: f32, abs_deg: f32, f: f32) -> Color {
-        let lines = render(w, h, angle);
+        let lines = render(w, h, &TH, angle);
         let (dw, dh) = (w as usize * 2, h as usize * 4);
         let (cx, cy) = ((dw as f32 - 1.0) / 2.0, (dh as f32 - 1.0) / 2.0);
         let rad = (dw.min(dh) as f32) / 2.0 - 1.0;
@@ -387,7 +391,7 @@ pub(crate) mod tests {
         lines[row].spans[col].style.fg.expect("probed cell should be lit")
     }
 
-    /// Ray index `k` maps to `theme::TEXT` when even, `theme::ACCENT` when
+    /// Ray index `k` maps to `TH.text` when even, `TH.accent` when
     /// odd (see `render`'s `votes[k % 2]` parity vote). A regression that
     /// made tone assignment contiguous (e.g. "first half TEXT, rest ACCENT")
     /// or reversed the parity tie-break would still pass
@@ -399,14 +403,14 @@ pub(crate) mod tests {
     fn adjacent_rays_use_different_alternating_tones() {
         let ray0 = cell_tone(W, H, 0.0, 18.0, F_IN); // k=0, even -> TEXT
         let ray1 = cell_tone(W, H, 0.0, 54.0, F_IN); // k=1, odd -> ACCENT
-        assert!(is_blend_of(ray0, theme::TEXT), "ray 0 (even) should be TEXT, got {ray0:?}");
-        assert!(is_blend_of(ray1, theme::ACCENT), "ray 1 (odd) should be ACCENT, got {ray1:?}");
+        assert!(is_blend_of(ray0, TH.text), "ray 0 (even) should be TEXT, got {ray0:?}");
+        assert!(is_blend_of(ray1, TH.accent), "ray 1 (odd) should be ACCENT, got {ray1:?}");
         assert_ne!(ray0, ray1, "adjacent rays must not share a tone");
     }
 
     #[test]
     fn empty_cells_are_spaces_and_lit_cells_are_braille() {
-        let lines = render(W, H, 0.0);
+        let lines = render(W, H, &TH, 0.0);
         assert_eq!(lines[0].spans[0].content, " ", "empty cell must be a space, not U+2800");
         for line in &lines {
             for span in &line.spans {
@@ -427,18 +431,18 @@ pub(crate) mod tests {
     /// ray and a cell far from any ray, which must stay empty.
     #[test]
     fn halo_cells_render_dimmer_than_lit_cells_in_the_rays_own_tone() {
-        let lines = render(W, H, 0.0);
+        let lines = render(W, H, &TH, 0.0);
 
         let halo = &lines[1].spans[7];
         assert_ne!(halo.content.as_ref(), " ", "expected a halo dot at (1, 7)");
         let halo_fg = halo.style.fg.unwrap();
         assert!(
-            is_blend_of(halo_fg, theme::TEXT),
+            is_blend_of(halo_fg, TH.text),
             "halo cell should use the ray's own tone (TEXT), got {halo_fg:?}"
         );
 
         let lit_fg = cell_tone(W, H, 0.0, 18.0, F_IN); // fully lit TEXT ray, k=0
-        assert!(is_blend_of(lit_fg, theme::TEXT));
+        assert!(is_blend_of(lit_fg, TH.text));
 
         let brightness = |c: Color| match c {
             Color::Rgb(r, g, b) => u32::from(r) + u32::from(g) + u32::from(b),

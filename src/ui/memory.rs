@@ -59,9 +59,9 @@ pub fn segment_widths(parts: &[u64], width: u16) -> Vec<u16> {
 }
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let inner = gauge::frame(f, area, "Memory");
+    let inner = gauge::frame(f, area, &app.theme, "Memory");
     let Some(mem) = app.medium.as_ref().and_then(|m| m.memory.as_ref()) else {
-        return gauge::unavailable(f, inner);
+        return gauge::unavailable(f, inner, &app.theme);
     };
 
     let state = match mem.pressure {
@@ -69,10 +69,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         PressureLevel::Warn => "WARN",
         PressureLevel::Critical => "CRITICAL",
     };
-    let pcolor = theme::pressure_color(mem.pressure);
+    let pcolor = app.theme.pressure_color(mem.pressure);
 
     let parts = [mem.app, mem.wired, mem.compressed, mem.free];
-    let colors = [theme::ACCENT, theme::gradient(0.6), theme::AMBER, theme::BG_CELL];
+    let colors = [app.theme.accent, app.theme.gradient(0.6), app.theme.amber, app.theme.bg_cell];
     let labels = ["app", "wired", "compressed", "free"];
     let widths = segment_widths(&parts, inner.width.saturating_sub(3));
 
@@ -97,13 +97,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         let coarse = format!("{:.0}G", used as f64 / 1024.0_f64.powi(3));
         let hero = font::hero_lines(&precise, &coarse, inner.width, pcolor);
 
-        let mut body = legend_lines(&labels, &colors, &parts, inner.width);
+        let mut body = legend_lines(&app.theme, &labels, &colors, &parts, inner.width);
         let avail = inner.height as usize;
 
         let pressure_span = Span::styled(state, Style::default().fg(pcolor).bold());
         let separate = [
-            Line::from(vec![Span::styled("pressure ", Style::default().fg(theme::DIM)), pressure_span.clone()]),
-            Line::styled(swap, Style::default().fg(theme::DIM)),
+            Line::from(vec![Span::styled("pressure ", Style::default().fg(app.theme.dim)), pressure_span.clone()]),
+            Line::styled(swap, Style::default().fg(app.theme.dim)),
         ];
 
         // At the narrowest full-tier card (28 cols) the legend alone needs 3
@@ -123,7 +123,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         } else {
             short_tail
         };
-        let merged = [Line::from(vec![pressure_span, Span::styled(tail, Style::default().fg(theme::DIM))])];
+        let merged = [Line::from(vec![pressure_span, Span::styled(tail, Style::default().fg(app.theme.dim))])];
 
         // Prefer the full two-line pressure/swap detail — it's more
         // informative and is what wider cards (where the legend packs into
@@ -159,19 +159,19 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 .flat_map(|((l, &c), &p)| {
                     vec![
                         Span::styled("■", Style::default().fg(c)),
-                        Span::styled(format!(" {l} {} ", fmt_bytes(p)), Style::default().fg(theme::DIM)),
+                        Span::styled(format!(" {l} {} ", fmt_bytes(p)), Style::default().fg(app.theme.dim)),
                     ]
                 })
                 .collect::<Vec<_>>(),
         );
         let lines = vec![
             Line::from(vec![
-                Span::styled("pressure ", Style::default().fg(theme::DIM)),
+                Span::styled("pressure ", Style::default().fg(app.theme.dim)),
                 Span::styled(state, Style::default().fg(pcolor).bold()),
             ]),
             Line::from(bar),
             legend,
-            Line::styled(swap, Style::default().fg(theme::DIM)),
+            Line::styled(swap, Style::default().fg(app.theme.dim)),
         ];
         f.render_widget(Paragraph::new(lines), inner);
     }
@@ -181,7 +181,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
 /// narrow card wraps across several rows instead of clipping one long line.
 /// At the narrowest full-tier card (28 cols) this takes 3 rows; from ~64
 /// cols wide, all four entries share one line.
-fn legend_lines(labels: &[&str], colors: &[Color], parts: &[u64], width: u16) -> Vec<Line<'static>> {
+fn legend_lines(
+    theme: &theme::Theme,
+    labels: &[&str],
+    colors: &[Color],
+    parts: &[u64],
+    width: u16,
+) -> Vec<Line<'static>> {
     let width = width as usize;
     let mut lines = Vec::new();
     let mut current: Vec<Span> = Vec::new();
@@ -194,7 +200,7 @@ fn legend_lines(labels: &[&str], colors: &[Color], parts: &[u64], width: u16) ->
             current_w = 0;
         }
         current.push(Span::styled("■", Style::default().fg(c)));
-        current.push(Span::styled(text, Style::default().fg(theme::DIM)));
+        current.push(Span::styled(text, Style::default().fg(theme.dim)));
         current_w += item_w;
     }
     if !current.is_empty() {
@@ -205,6 +211,10 @@ fn legend_lines(labels: &[&str], colors: &[Color], parts: &[u64], width: u16) ->
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use super::segment_widths;
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
@@ -264,7 +274,7 @@ mod tests {
         // cells rather than grepping rendered text for glyph characters.
         let full_buf = draw_buffer(40, 12);
         let filled =
-            full_buf.content().iter().filter(|c| c.style().bg == Some(super::theme::GREEN)).count();
+            full_buf.content().iter().filter(|c| c.style().bg == Some(TH.green)).count();
         let expected: usize =
             crate::ui::font::big_text("6.5G").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
         assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"6.5G\"");
@@ -276,7 +286,7 @@ mod tests {
 
         let compact_buf = draw_buffer(40, 10);
         let compact_filled =
-            compact_buf.content().iter().any(|c| c.style().bg == Some(super::theme::GREEN));
+            compact_buf.content().iter().any(|c| c.style().bg == Some(TH.green));
         assert!(!compact_filled, "compact tier must not paint any hero bitmap pixels");
         let compact = draw(40, 10);
         assert!(compact.contains("pressure "));

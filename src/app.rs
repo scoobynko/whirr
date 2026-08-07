@@ -68,6 +68,9 @@ pub struct App {
     pub power_hist: History<(f64, f64, f64)>,
     pub net_hist: History<(f64, f64)>,
     pub focus: Focus,
+    /// The palette every widget draws with. On `App` rather than a global so
+    /// a render function that already has `&App` needs no extra argument.
+    pub theme: crate::ui::theme::Theme,
     pub sort_by: SortBy,
     /// One cursor per panel, indexed by `Focus::index`. A single shared cursor
     /// let scrolling one card move another card's view — the panels have
@@ -111,6 +114,7 @@ impl App {
             power_hist: History::new(60),
             net_hist: History::new(60),
             focus: Focus::Processes,
+            theme: crate::ui::theme::Theme::dark(),
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
             update: None,

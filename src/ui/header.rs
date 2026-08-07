@@ -20,8 +20,8 @@ use crate::units::fmt_duration;
 // (Terminal.app seams foreground block glyphs but never a cell background).
 // Shared by both tiers: the compact header band is sized to this face's 5
 // rows rather than carrying a separate, smaller one.
-fn logo4_lines() -> Vec<Line<'static>> {
-    font::bitmap_lines(&font::big_text("WHIRR"), theme::ACCENT)
+fn logo4_lines(theme: &theme::Theme) -> Vec<Line<'static>> {
+    font::bitmap_lines(&font::big_text("WHIRR"), theme.accent)
 }
 
 // The fan is the braille burst at every size — a radial spray of
@@ -59,7 +59,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     .split(area);
 
     let logo_area = Rect { y: area.y + 2, height: area.height.saturating_sub(2).min(5), ..cols[0] };
-    f.render_widget(Paragraph::new(logo4_lines()), logo_area);
+    f.render_widget(Paragraph::new(logo4_lines(&app.theme)), logo_area);
 
     if !app.no_fan {
         // The burst sits 19x7 centred in the 9-row band — a blank row above
@@ -70,7 +70,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
             height: FAN_ROWS.min(area.height),
             ..cols[1]
         };
-        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, app.fan_angle_deg)), fan);
+        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, &app.theme, app.fan_angle_deg)), fan);
     }
 
     let facts_area = Rect {
@@ -89,7 +89,7 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
     if area.height < COMPACT_FAN_ROWS {
         let cols = Layout::horizontal([Constraint::Length(8), Constraint::Min(0)]).split(area);
         f.render_widget(
-            Paragraph::new(Line::styled("whirr", Style::default().fg(theme::ACCENT).bold())),
+            Paragraph::new(Line::styled("whirr", Style::default().fg(app.theme.accent).bold())),
             cols[0],
         );
         f.render_widget(facts_paragraph(app), cols[1]);
@@ -108,14 +108,14 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
     .split(area);
 
     // Same bitmap face as the full tier, painted as cell backgrounds.
-    f.render_widget(Paragraph::new(logo4_lines()), cols[0]);
+    f.render_widget(Paragraph::new(logo4_lines(&app.theme)), cols[0]);
 
     if !app.no_fan && room_for_fan {
         let fan = Rect {
             height: COMPACT_FAN_ROWS.min(area.height),
             ..cols[1]
         };
-        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, app.fan_angle_deg)), fan);
+        f.render_widget(Paragraph::new(burst::render(fan.width, fan.height, &app.theme, app.fan_angle_deg)), fan);
     }
 
     f.render_widget(facts_paragraph(app), cols[2]);
@@ -145,7 +145,7 @@ fn facts_paragraph(app: &App) -> Paragraph<'_> {
         Line::from(format!("v{}", env!("CARGO_PKG_VERSION"))),
     ];
     Paragraph::new(facts)
-        .style(Style::default().fg(theme::DIM))
+        .style(Style::default().fg(app.theme.dim))
         .alignment(Alignment::Right)
 }
 
@@ -155,7 +155,7 @@ mod tests {
     use ratatui::Terminal;
 
     use crate::app::App;
-    use crate::ui::theme;
+
 
     #[test]
     fn logo4_is_five_uniform_rows_within_budget() {
@@ -194,7 +194,7 @@ mod tests {
         let filled_cells = buf
             .content()
             .iter()
-            .filter(|cell| cell.style().bg == Some(theme::ACCENT))
+            .filter(|cell| cell.style().bg == Some(app.theme.accent))
             .count();
         let bitmap = crate::ui::font::big_text("WHIRR");
         let expected: usize = bitmap.iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
@@ -241,7 +241,7 @@ mod tests {
         let app = App::demo();
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let buf = t.backend().buffer().clone();
-        let filled = buf.content().iter().filter(|c| c.style().bg == Some(theme::ACCENT)).count();
+        let filled = buf.content().iter().filter(|c| c.style().bg == Some(app.theme.accent)).count();
         let expected: usize = crate::ui::font::big_text("WHIRR")
             .iter()
             .flat_map(|r| r.chars())
@@ -294,9 +294,9 @@ mod tests {
             }
             let fg = cell.style().fg.unwrap();
             // Reuse the blend-line check from the burst module's tests.
-            if crate::ui::burst::tests::is_blend_of(fg, theme::TEXT) {
+            if crate::ui::burst::tests::is_blend_of(fg, app.theme.text) {
                 saw_text = true;
-            } else if crate::ui::burst::tests::is_blend_of(fg, theme::ACCENT) {
+            } else if crate::ui::burst::tests::is_blend_of(fg, app.theme.accent) {
                 saw_accent = true;
             } else {
                 panic!("off-brand colour {fg:?}");
