@@ -4,6 +4,7 @@ pub mod font;
 pub mod gauge;
 pub mod header;
 pub mod memory;
+pub mod modal;
 pub mod network;
 pub mod ports;
 pub mod power;
@@ -52,6 +53,32 @@ pub fn draw(f: &mut Frame, app: &App) {
     header::render(f, chunks[0], app);
     render_gauges(f, chunks[1], app, &screen);
     render_body(f, chunks[2], app, &screen);
+
+    // Last, over everything, and over the *whole* frame rather than the panel
+    // the target came from — a confirmation raised on the localhost card used
+    // to appear inside the Processes box two panels away.
+    if let Some((pid, name)) = &app.pending_kill {
+        render_kill_dialog(f, area, *pid, name);
+    }
+}
+
+/// "You are about to send SIGTERM to this" — the one irreversible thing whirr
+/// does, so it gets the red accent and spells out both what dies and how to
+/// back out.
+fn render_kill_dialog(f: &mut Frame, area: Rect, pid: i32, name: &str) {
+    let lines = vec![
+        Line::styled(name.to_string(), Style::default().fg(theme::TEXT).bold()),
+        Line::styled(format!("pid {pid}"), Style::default().fg(theme::DIM)),
+        Line::from(""),
+        Line::from(vec![
+            Span::styled("y", Style::default().fg(theme::RED).bold()),
+            Span::styled(" confirm", Style::default().fg(theme::TEXT)),
+            Span::styled("   ", Style::default()),
+            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
+            Span::styled(" cancel", Style::default().fg(theme::TEXT)),
+        ]),
+    ];
+    modal::render(f, area, "confirm kill", lines, theme::RED);
 }
 
 /// The gauge band. `Tier::Grid` stacks the four cards 2x2 — `Screen` only
@@ -152,6 +179,18 @@ fn beside_network(f: &mut Frame, area: Rect, app: &App, screen: &Screen) -> Rect
 /// in fixed positions (select, sort?, kill?, tab, quit) so the line reads as
 /// entries appearing/disappearing as focus changes, not reshuffling.
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    // While a dialog is up every other key is inert, so advertising them
+    // would be a lie. The footer becomes the dialog's own key legend.
+    if app.pending_kill.is_some() {
+        let text = Line::from(vec![
+            Span::styled("y", Style::default().fg(theme::RED).bold()),
+            Span::styled(" confirm · ", Style::default().fg(theme::DIM)),
+            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
+            Span::styled(" cancel", Style::default().fg(theme::DIM)),
+        ]);
+        f.render_widget(Paragraph::new(text), area);
+        return;
+    }
     let show_sort = matches!(app.focus, Focus::Processes);
     let show_kill = matches!(app.focus, Focus::Processes | Focus::Localhost);
     let show_open = matches!(app.focus, Focus::Localhost);

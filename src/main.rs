@@ -43,7 +43,7 @@ KEYS (while running):
     tab        cycle focus between cards
     c / m      sort processes by CPU / memory
     o          open the selected dev server in your browser
-    k          kill the selected process or dev server (asks first)
+    k          kill the selected process or dev server (a dialog asks first)
     q          quit
 ";
 

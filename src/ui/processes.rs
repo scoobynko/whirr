@@ -29,14 +29,12 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // The old always-on hint row moved to the global footer (see
     // `ui::render_footer`); this status line only exists — and only claims a
     // row — when there's actually a kill confirmation or message to show.
-    let status = if let Some((pid, name)) = &app.pending_kill {
-        Some(Line::styled(
-            format!("kill {name} ({pid})? y/n"),
-            Style::default().fg(theme::RED).bold(),
-        ))
-    } else {
-        app.message.as_ref().map(|msg| Line::styled(msg.clone(), Style::default().fg(theme::AMBER)))
-    };
+    // The kill confirmation used to live here too, which is why one raised on
+    // the localhost card appeared inside this panel. It is a dialog now (see
+    // `ui::modal`); this line is left to `message`, which is a status report
+    // and not a question.
+    let status =
+        app.message.as_ref().map(|msg| Line::styled(msg.clone(), Style::default().fg(theme::AMBER)));
 
     let mem_total = app.fast.as_ref().map_or(1, |f| f.mem_total).max(1);
     let visible_rows = inner.height.saturating_sub(status.is_some() as u16) as usize;

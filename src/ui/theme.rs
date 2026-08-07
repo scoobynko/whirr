@@ -11,6 +11,7 @@ pub const TEXT: Color = Color::Rgb(205, 214, 217);
 pub const DIM: Color = Color::Rgb(90, 105, 110);         // borders, labels
 pub const BG_CELL: Color = Color::Rgb(18, 32, 36);       // empty heatmap cell (used as a *foreground* for text-on-accent, e.g. selected rows — do not repurpose)
 pub const BASE: Color = Color::Rgb(10, 14, 18);          // near-black frame background, slight cool cast
+pub const BG_MODAL: Color = Color::Rgb(22, 30, 36);      // dialog surface: reads as raised above BASE without competing with ACCENT
 
 const GRAD_FROM: (u8, u8, u8) = (14, 58, 58); // dark teal
 const GRAD_TO: (u8, u8, u8) = (45, 225, 194);
