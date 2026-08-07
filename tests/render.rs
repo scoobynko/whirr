@@ -173,7 +173,10 @@ fn stock_80x24_fits_without_starving_header_or_ports() {
 #[test]
 fn large_size_gives_the_three_card_row_its_full_height() {
     let c = draw_at(160, 45);
-    for tty in ["ttys020", "ttys021", "ttys004"] {
+    // The two axterio sessions collide, so they carry ttys. `whirr`'s does
+    // not any more (see `ui::sessions`) — the fourth row is what proves the
+    // full height anyway, since rows render in order.
+    for tty in ["ttys020", "ttys021"] {
         assert!(c.contains(tty), "missing {tty} — three-card row didn't reach its full height");
     }
     assert!(c.contains("eye-claudius"), "fourth demo session missing at large size");
