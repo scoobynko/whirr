@@ -5,6 +5,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
 use crate::sampler::ports::{self, PortGroup, PortRow};
+use crate::settings::Settings;
 use crate::sampler::sessions::ClaudeSession;
 use crate::sampler::{
     BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
@@ -68,9 +69,17 @@ pub struct App {
     pub power_hist: History<(f64, f64, f64)>,
     pub net_hist: History<(f64, f64)>,
     pub focus: Focus,
+    /// What the user has chosen. `theme` is derived from this and kept
+    /// alongside it so widgets read one resolved value instead of resolving
+    /// it per colour, per frame.
+    pub settings: Settings,
     /// The palette every widget draws with. On `App` rather than a global so
     /// a render function that already has `&App` needs no extra argument.
+    /// Always `settings.theme()` — see `apply_settings`.
     pub theme: crate::ui::theme::Theme,
+    pub settings_open: bool,
+    /// Which row the settings dialog has under its cursor.
+    pub settings_row: usize,
     pub sort_by: SortBy,
     /// One cursor per panel, indexed by `Focus::index`. A single shared cursor
     /// let scrolling one card move another card's view — the panels have
@@ -93,7 +102,6 @@ pub struct App {
     /// opening.
     open_request: Option<String>,
     pub message: Option<String>,
-    pub no_fan: bool,
     /// The burst's inner-ring rotation in degrees, wrapped to `0.0..360.0`.
     /// The outer ring is its negation, so one accumulator drives both. Thermal:
     /// the hotter the machine, the faster it turns.
@@ -104,7 +112,7 @@ pub struct App {
 
 impl App {
     pub fn new(no_fan: bool) -> Self {
-        Self {
+        let mut app = Self {
             statics: SystemStatic::read(),
             fast: None,
             medium: None,
@@ -114,7 +122,10 @@ impl App {
             power_hist: History::new(60),
             net_hist: History::new(60),
             focus: Focus::Processes,
-            theme: crate::ui::theme::Theme::dark(),
+            settings: Settings::default(),
+            theme: Settings::default().theme(),
+            settings_open: false,
+            settings_row: 0,
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
             update: None,
@@ -122,11 +133,42 @@ impl App {
             pending_port_pick: None,
             open_request: None,
             message: None,
-            no_fan,
             fan_angle_deg: 0.0,
             should_quit: false,
             dirty: true,
+        };
+        app.settings.fan = !no_fan;
+        app
+    }
+
+    /// Whether the header animation is suppressed. A view of `settings.fan`
+    /// rather than a field of its own: two sources of truth for one switch is
+    /// how a `--no-fan` that stops working gets shipped.
+    pub fn no_fan(&self) -> bool {
+        !self.settings.fan
+    }
+
+    /// Rows the settings dialog offers.
+    pub const SETTINGS_ROWS: usize = 4;
+
+    /// Re-resolve the palette after a setting changes. Cheap — `Theme` is
+    /// eleven `Copy` colours — and doing it here rather than per-colour keeps
+    /// the render path reading one value.
+    fn apply_settings(&mut self) {
+        self.theme = self.settings.theme();
+    }
+
+    /// Change the setting under the cursor. Every row cycles rather than
+    /// having separate "next"/"previous" keys — with two to five options each,
+    /// a second key would be ceremony.
+    fn cycle_setting(&mut self) {
+        match self.settings_row {
+            0 => self.settings.palette = self.settings.palette.next(),
+            1 => self.settings.accent = self.settings.accent.next(),
+            2 => self.settings.terminal_bg = !self.settings.terminal_bg,
+            _ => self.settings.fan = !self.settings.fan,
         }
+        self.apply_settings();
     }
 
     /// A pre-populated `App` for render tests and manual UI inspection: one
@@ -341,6 +383,24 @@ impl App {
         // Dialogs are checked before anything else and always return, so no
         // key can act on the dashboard behind one — and no second dialog can
         // stack on top of the first.
+        if self.settings_open {
+            match key.code {
+                KeyCode::Up => self.settings_row = self.settings_row.saturating_sub(1),
+                KeyCode::Down => {
+                    self.settings_row = (self.settings_row + 1).min(Self::SETTINGS_ROWS - 1);
+                }
+                // Every row cycles, so left, right and Enter all mean "next
+                // value" — there is nothing to go back to that going forward
+                // does not reach.
+                KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+                    self.cycle_setting();
+                }
+                KeyCode::Esc | KeyCode::Char('s') => self.settings_open = false,
+                _ => {}
+            }
+            return;
+        }
+
         if let Some(pick) = self.pending_port_pick.clone() {
             match key.code {
                 // '1' addresses the first entry, so the offset is one less.
@@ -378,6 +438,10 @@ impl App {
 
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
+            KeyCode::Char('s') => {
+                self.settings_open = true;
+                self.settings_row = 0;
+            }
             // Each panel keeps its own cursor across a Tab, so returning to a
             // card puts you back where you left it.
             KeyCode::Tab => self.focus = self.focus.next(),
@@ -569,6 +633,61 @@ mod tests {
         assert!(a.pending_kill.is_some());
         a.on_key(key('n'));
         assert!(a.pending_kill.is_none());
+    }
+
+    #[test]
+    fn s_opens_settings_and_esc_closes_it() {
+        let mut a = App::demo();
+        press(&mut a, 's');
+        assert!(a.settings_open, "s should open the dialog");
+        a.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(!a.settings_open, "Esc should close it");
+    }
+
+    #[test]
+    fn changing_a_setting_takes_effect_immediately() {
+        // The point of a dialog over a config file: you see the change while
+        // you are choosing it.
+        let mut a = App::demo();
+        let before = a.theme;
+        press(&mut a, 's');
+        a.on_key(KeyEvent::from(KeyCode::Right)); // palette: dark -> light
+        assert_ne!(a.theme, before, "the palette change should already be visible");
+        assert_eq!(a.theme, a.settings.theme(), "the live theme must follow the settings");
+    }
+
+    #[test]
+    fn the_settings_dialog_swallows_keys_that_would_otherwise_act() {
+        // Same discipline as the other two dialogs: k must not raise a kill
+        // confirmation underneath the settings.
+        let mut a = App::demo();
+        press(&mut a, 's');
+        press(&mut a, 'k');
+        press(&mut a, 'q');
+        assert!(a.pending_kill.is_none(), "no dialog should stack on settings");
+        assert!(!a.should_quit, "q is inert while a dialog is open");
+        assert!(a.settings_open);
+    }
+
+    #[test]
+    fn the_cursor_moves_between_rows_and_stops_at_the_ends() {
+        let mut a = App::demo();
+        press(&mut a, 's');
+        assert_eq!(a.settings_row, 0);
+        a.on_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(a.settings_row, 0, "must not run off the top");
+        for _ in 0..20 {
+            a.on_key(KeyEvent::from(KeyCode::Down));
+        }
+        assert_eq!(a.settings_row, App::SETTINGS_ROWS - 1, "must not run off the bottom");
+    }
+
+    #[test]
+    fn the_fan_setting_drives_the_animation() {
+        let mut a = App::demo();
+        assert!(!a.no_fan(), "the fan runs by default");
+        a.settings.fan = false;
+        assert!(a.no_fan(), "turning the setting off stops the animation");
     }
 
     #[test]

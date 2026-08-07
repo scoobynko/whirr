@@ -570,6 +570,73 @@ fn the_port_picker_renders_at_every_size_without_panicking() {
     }
 }
 
+// --- the settings dialog -------------------------------------------------
+
+fn demo_settings_open() -> App {
+    let mut app = App::demo();
+    app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
+    assert!(app.settings_open);
+    app
+}
+
+#[test]
+fn the_settings_dialog_lists_every_choice_with_its_current_value() {
+    let c = draw_app_at(&demo_settings_open(), 120, 40);
+    for row in ["theme", "accent", "background", "fan"] {
+        assert!(c.contains(row), "settings should offer {row}");
+    }
+    assert!(c.contains("dark"), "the current palette should be shown");
+    assert!(c.contains("teal"), "the current accent should be shown");
+}
+
+#[test]
+fn changing_the_palette_changes_what_is_actually_drawn() {
+    // The whole case for a dialog rather than a config file.
+    let before = draw_buffer_at(&demo_settings_open(), 120, 40);
+    let mut app = demo_settings_open();
+    app.on_key(KeyEvent::from(KeyCode::Right)); // theme: dark -> light
+    let after = draw_buffer_at(&app, 120, 40);
+    assert_ne!(
+        before[(2, 2)].bg, after[(2, 2)].bg,
+        "switching to the light palette should repaint the frame"
+    );
+}
+
+#[test]
+fn the_terminal_background_setting_stops_whirr_painting_the_frame() {
+    let mut app = App::demo();
+    app.settings.terminal_bg = true;
+    app.theme = app.settings.theme();
+    let buf = draw_buffer_at(&app, 120, 40);
+    assert_eq!(
+        buf[(0, 0)].bg,
+        ratatui::style::Color::Reset,
+        "an unpainted frame must leave the terminal's own background showing"
+    );
+    // And the fan, which blends toward `base`, must still have rendered.
+    let c: String = buf.content().iter().map(|c| c.symbol()).collect();
+    assert!(has_braille(&c), "the burst fan must survive an unpainted background");
+}
+
+#[test]
+fn the_settings_dialog_renders_at_every_size_without_panicking() {
+    for (w, h) in [(200, 50), (120, 40), (80, 24), (48, 14), (30, 8), (20, 5), (6, 2), (1, 1)] {
+        let content = draw_app_at(&demo_settings_open(), w, h);
+        assert!(!content.is_empty(), "{w}x{h} produced nothing");
+    }
+}
+
+#[test]
+fn the_footer_sheds_hints_rather_than_clipping_the_quit_key() {
+    // Adding "s settings" pushed the row past 60 columns and cut "q quit" off
+    // the end — the one key nobody should have to guess.
+    for w in [40u16, 50, 60, 70, 80, 120] {
+        let c = draw_app_at(&App::demo(), w, 24);
+        assert!(c.contains("q quit"), "{w} columns: quit must never be dropped");
+        assert!(c.contains("tab focus"), "{w} columns: tab must never be dropped");
+    }
+}
+
 // --- the running version -------------------------------------------------
 
 #[test]

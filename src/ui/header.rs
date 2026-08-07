@@ -61,7 +61,7 @@ fn render_full(f: &mut Frame, area: Rect, app: &App) {
     let logo_area = Rect { y: area.y + 2, height: area.height.saturating_sub(2).min(5), ..cols[0] };
     f.render_widget(Paragraph::new(logo4_lines(&app.theme)), logo_area);
 
-    if !app.no_fan {
+    if !app.no_fan() {
         // The burst sits 19x7 centred in the 9-row band — a blank row above
         // and below. It scales to whatever rect it is given, so the size lives
         // here rather than in the rasterizer.
@@ -110,7 +110,7 @@ fn render_compact(f: &mut Frame, area: Rect, app: &App) {
     // Same bitmap face as the full tier, painted as cell backgrounds.
     f.render_widget(Paragraph::new(logo4_lines(&app.theme)), cols[0]);
 
-    if !app.no_fan && room_for_fan {
+    if !app.no_fan() && room_for_fan {
         let fan = Rect {
             height: COMPACT_FAN_ROWS.min(area.height),
             ..cols[1]
@@ -309,7 +309,7 @@ mod tests {
     fn no_fan_leaves_the_header_free_of_braille() {
         let mut t = Terminal::new(TestBackend::new(80, 9)).unwrap();
         let mut app = App::demo();
-        app.no_fan = true;
+        app.settings.fan = false;
         t.draw(|f| super::render(f, f.area(), &app)).unwrap();
         let s: String = t.backend().buffer().content().iter().map(|c| c.symbol()).collect();
         assert!(!has_braille(&s), "--no-fan must not draw the burst");

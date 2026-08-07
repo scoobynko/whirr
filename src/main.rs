@@ -49,6 +49,7 @@ KEYS (while running):
     o          open the selected dev server in your browser (asks which
                port when the row offers more than one)
     k          kill the selected process or dev server (a dialog asks first)
+    s          settings: theme, accent colour, background, fan
     q          quit
 ";
 
@@ -154,7 +155,7 @@ fn main() -> io::Result<()> {
     let mut last_fan = std::time::Instant::now();
 
     loop {
-        let timeout = if app.no_fan {
+        let timeout = if app.no_fan() {
             Duration::from_millis(250)
         } else {
             app.fan_interval()
@@ -181,7 +182,7 @@ fn main() -> io::Result<()> {
         while let Ok(snap) = rx.try_recv() {
             app.ingest(snap);
         }
-        if !app.no_fan && last_fan.elapsed() >= app.fan_interval() {
+        if !app.no_fan() && last_fan.elapsed() >= app.fan_interval() {
             let now = std::time::Instant::now();
             app.tick_fan(now - last_fan);
             last_fan = now;

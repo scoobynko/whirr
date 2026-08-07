@@ -77,6 +77,7 @@ network, then power, then temperature. Processes and CPU always survive.
 | `c` / `m` | sort processes by CPU / memory |
 | `o` | open the selected dev server in your browser (localhost card only) |
 | `k` | kill the selected process or dev server (SIGTERM; a dialog asks first — `y` confirms, `n` or `Esc` cancels) |
+| `s` | open settings: theme, accent colour, background, fan |
 | `q` / `Ctrl-C` | quit |
 
 `k` is deliberately inert on the Claude sessions and others cards: ending a
@@ -114,6 +115,19 @@ crates.io requires), it runs on its own thread so it can never delay startup
 or a redraw, and the answer is cached in
 `~/.cache/whirr/update-check`. Turn it off with `--no-update-check`, and
 whirr makes no network requests at all.
+
+## Settings
+
+`s` opens a dialog for the things that are a matter of taste: a light or dark
+palette, one of five accent colours, whether the fan animates, and whether
+whirr paints the frame background at all.
+
+That last one matters if your terminal is themed or translucent — whirr paints
+edge to edge by default, which overrides it. Set **background** to `terminal`
+and the frame is left alone.
+
+Changes apply as you make them. They currently last for the session; they are
+not yet written to disk.
 
 ## Performance budget
 

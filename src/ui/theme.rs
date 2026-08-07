@@ -36,6 +36,14 @@ pub struct Theme {
     /// Ends of the heatmap/gauge gradient.
     pub grad_from: (u8, u8, u8),
     pub grad_to: (u8, u8, u8),
+    /// Whether `draw` fills the frame with `base`.
+    ///
+    /// Separate from `base` on purpose. "Use the terminal's own background"
+    /// cannot be expressed as `base: Color::Reset`, because `base` is also the
+    /// colour `ramp` and `blend` darken toward — and `blend` panics on
+    /// anything that isn't `Rgb`, on every frame of the burst fan. So the
+    /// colour stays real and only the fill is skipped.
+    pub paint_bg: bool,
 }
 
 impl Default for Theme {
@@ -60,6 +68,31 @@ impl Theme {
             bg_modal: Color::Rgb(22, 30, 36),
             grad_from: (14, 58, 58),
             grad_to: (45, 225, 194),
+            paint_bg: true,
+        }
+    }
+
+    /// A hand-picked light palette, not an inversion of the dark one.
+    ///
+    /// Inverting would keep every colour's contrast tuned for near-black:
+    /// the teal accent and the dim grey both lose most of their separation
+    /// against a near-white field and read as washed out. These are chosen
+    /// against this background instead — darker, more saturated, and with the
+    /// greys re-picked so borders stay quiet without disappearing.
+    pub const fn light() -> Self {
+        Self {
+            accent: Color::Rgb(0, 132, 112),
+            amber: Color::Rgb(160, 90, 0),
+            red: Color::Rgb(190, 40, 38),
+            green: Color::Rgb(28, 122, 54),
+            text: Color::Rgb(28, 38, 44),
+            dim: Color::Rgb(118, 132, 138),
+            bg_cell: Color::Rgb(224, 231, 233),
+            base: Color::Rgb(246, 248, 249),
+            bg_modal: Color::Rgb(255, 255, 255),
+            grad_from: (200, 228, 222),
+            grad_to: (0, 132, 112),
+            paint_bg: true,
         }
     }
 
