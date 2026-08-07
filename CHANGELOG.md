@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.6
+
+_2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.5...v0.3.6)_
+
+
+### Added
+
+- Tell the user when a newer release exists ([f169b11](https://github.com/scoobynko/whirr/commit/f169b11cfb79945d1164f8b11680c9253cadb890))
+- *(ui)* Show the running version in the header ([778959e](https://github.com/scoobynko/whirr/commit/778959e731249f57b67be9b67ad3910c93f57b6d))
 ## v0.3.5
 
 _2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.4...v0.3.5)_
