@@ -4,7 +4,7 @@ use ratatui::widgets::Paragraph;
 use crate::app::{App, Focus};
 use crate::sampler::ports::{PortGroup, PortRow};
 use super::text::{pad, trunc, width as disp_width};
-use super::theme;
+
 
 /// Fixed field widths shared by the width budgeting below. `LABEL_WIDTH` is
 /// the desired (not guaranteed — see the localhost/other branch) label
@@ -129,17 +129,17 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
     let stale = app.slow.as_ref().is_some_and(|s| s.stale);
     let title = card.title();
     let full_title = if stale { format!("{title} ⟳ stale") } else { title.to_string() };
-    let block = theme::panel_block(&full_title, focused);
+    let block = app.theme.panel_block(&full_title, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     if app.slow.is_none() {
-        f.render_widget(Paragraph::new("scanning…").style(Style::default().fg(theme::DIM)), inner);
+        f.render_widget(Paragraph::new("scanning…").style(Style::default().fg(app.theme.dim)), inner);
         return;
     }
     if rows.is_empty() {
         f.render_widget(
-            Paragraph::new("no listening ports").style(Style::default().fg(theme::DIM)),
+            Paragraph::new("no listening ports").style(Style::default().fg(app.theme.dim)),
             inner,
         );
         return;
@@ -172,7 +172,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
                     PortGroup::Claude => "claude sessions",
                     PortGroup::Other => "others",
                 },
-                Style::default().fg(theme::DIM),
+                Style::default().fg(app.theme.dim),
             ));
             last_group = Some(r.group);
             if lines.len() >= visible_rows {
@@ -181,18 +181,18 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
         }
         let selected = cursor == Some(i);
         let base = if selected {
-            Style::default().fg(theme::BG_CELL).bg(theme::ACCENT)
+            Style::default().fg(app.theme.bg_cell).bg(app.theme.accent)
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(app.theme.text)
         };
         let mut spans: Vec<Span> = Vec::new();
         let mut prefix_width = 0usize;
         if markers {
             // The marker carries the group when there is no header to do it.
             let (glyph, colour) = match r.group {
-                PortGroup::Localhost => ("●", theme::ACCENT),
-                PortGroup::Claude => ("○", theme::TEXT),
-                PortGroup::Other => ("○", theme::DIM),
+                PortGroup::Localhost => ("●", app.theme.accent),
+                PortGroup::Claude => ("○", app.theme.text),
+                PortGroup::Other => ("○", app.theme.dim),
             };
             spans.push(Span::styled(glyph, if selected { base } else { Style::default().fg(colour) }));
             prefix_width += disp_width(glyph);
@@ -231,7 +231,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
                     };
                     spans.push(Span::styled(
                         cpu_text,
-                        if selected { base } else { Style::default().fg(theme::ACCENT) },
+                        if selected { base } else { Style::default().fg(app.theme.accent) },
                     ));
                 }
             }
@@ -258,7 +258,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
                 }
                 spans.push(Span::styled(
                     ports_output,
-                    if selected { base } else { Style::default().fg(theme::ACCENT) },
+                    if selected { base } else { Style::default().fg(app.theme.accent) },
                 ));
             }
         }
@@ -269,6 +269,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
@@ -586,9 +590,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("no marker glyph found on row {y}"))
         };
 
-        assert_eq!(marker_fg(row_y("web")), super::theme::ACCENT, "localhost marker should be ACCENT");
-        assert_eq!(marker_fg(row_y("claude-proj")), super::theme::TEXT, "claude marker should be TEXT");
-        assert_eq!(marker_fg(row_y("syslogd")), super::theme::DIM, "other marker should be DIM");
+        assert_eq!(marker_fg(row_y("web")), TH.accent, "localhost marker should be ACCENT");
+        assert_eq!(marker_fg(row_y("claude-proj")), TH.text, "claude marker should be TEXT");
+        assert_eq!(marker_fg(row_y("syslogd")), TH.dim, "other marker should be DIM");
     }
 
     #[test]

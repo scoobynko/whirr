@@ -37,7 +37,13 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Block fills its full area's background via Buffer::set_style, which
     // only patches the bg channel — later fg-only styles (most widgets here)
     // leave this bg untouched.
-    f.render_widget(Block::default().style(Style::default().bg(theme::BASE)), area);
+    // Skipped when the user asked for the terminal's own background: whirr
+    // painting edge to edge is what overrides a themed or translucent
+    // terminal. `theme.base` still holds a real colour either way — it is the
+    // anchor `ramp` and `blend` darken toward.
+    if app.theme.paint_bg {
+        f.render_widget(Block::default().style(Style::default().bg(app.theme.base)), area);
+    }
 
     let screen = Screen::resolve(area);
     let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
@@ -57,11 +63,69 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Last, over everything, and over the *whole* frame rather than the panel
     // the target came from — a confirmation raised on the localhost card used
     // to appear inside the Processes box two panels away.
-    if let Some((pid, name)) = &app.pending_kill {
-        render_kill_dialog(f, area, *pid, name);
+    if app.settings_open {
+        render_settings(f, area, app);
+    } else if let Some((pid, name)) = &app.pending_kill {
+        render_kill_dialog(f, area, &app.theme, *pid, name);
     } else if let Some(pick) = &app.pending_port_pick {
-        render_port_picker(f, area, pick);
+        render_port_picker(f, area, &app.theme, pick);
     }
+}
+
+/// The settings dialog: one row per choice, current value on the right.
+///
+/// Changes apply as you make them rather than on a confirm step — the whole
+/// argument for a dialog over a config file is seeing the palette while you
+/// are choosing it.
+fn render_settings(f: &mut Frame, area: Rect, app: &App) {
+    let t = &app.theme;
+    let rows: [(&str, String); App::SETTINGS_ROWS] = [
+        ("theme", app.settings.palette.label().to_string()),
+        ("accent", app.settings.accent.label().to_string()),
+        (
+            "background",
+            // Under the light palette this row is inert, and it says so
+            // rather than accepting a keypress that changes nothing.
+            match (app.settings.terminal_bg_available(), app.settings.terminal_bg) {
+                (false, _) => "painted (light)".to_string(),
+                (true, true) => "terminal".to_string(),
+                (true, false) => "painted".to_string(),
+            },
+        ),
+        ("fan", if app.settings.fan { "on".into() } else { "off".into() }),
+    ];
+    // The widest label and value decide the column, so the values line up
+    // instead of ragged-right.
+    let label_w = rows.iter().map(|(l, _)| l.chars().count()).max().unwrap_or(0);
+    let value_w = rows.iter().map(|(_, v)| v.chars().count()).max().unwrap_or(0);
+
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .map(|(i, (label, value))| {
+            let selected = i == app.settings_row;
+            // An inert row is dimmed even under the cursor: the cursor says
+            // "here", the colour says "nothing to change".
+            let locked = i == 2 && !app.settings.terminal_bg_available();
+            let (marker, style) = if locked {
+                ("  ", Style::default().fg(t.dim))
+            } else if selected {
+                ("› ", Style::default().fg(t.accent).bold())
+            } else {
+                ("  ", Style::default().fg(t.text))
+            };
+            Line::from(vec![
+                Span::styled(marker, style),
+                Span::styled(format!("{label:<label_w$}   "), style),
+                Span::styled(
+                    format!("{value:>value_w$}"),
+                    if selected && !locked { style } else { Style::default().fg(t.dim) },
+                ),
+            ])
+        })
+        .collect();
+
+    modal::render(f, area, t, "settings", lines, t.accent);
 }
 
 /// "Which of this row's ports did you mean?" — asked only when the row offers
@@ -69,43 +133,43 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// instead of Storybook.
 ///
 /// Accented rather than red: nothing here is destructive.
-fn render_port_picker(f: &mut Frame, area: Rect, pick: &crate::app::PortPick) {
+fn render_port_picker(f: &mut Frame, area: Rect, theme: &theme::Theme, pick: &crate::app::PortPick) {
     let mut lines = vec![
-        Line::styled(pick.label.clone(), Style::default().fg(theme::TEXT).bold()),
+        Line::styled(pick.label.clone(), Style::default().fg(theme.text).bold()),
         Line::from(""),
     ];
     for (i, port) in pick.ports.iter().enumerate() {
         lines.push(Line::from(vec![
             // The digit that opens it, next to what it opens.
-            Span::styled(format!("{}", i + 1), Style::default().fg(theme::ACCENT).bold()),
-            Span::styled(format!("  :{port}"), Style::default().fg(theme::TEXT)),
+            Span::styled(format!("{}", i + 1), Style::default().fg(theme.accent).bold()),
+            Span::styled(format!("  :{port}"), Style::default().fg(theme.text)),
         ]));
     }
     lines.push(Line::from(""));
     lines.push(Line::from(vec![
-        Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-        Span::styled(" cancel", Style::default().fg(theme::DIM)),
+        Span::styled("n", Style::default().fg(theme.text).bold()),
+        Span::styled(" cancel", Style::default().fg(theme.dim)),
     ]));
-    modal::render(f, area, "open which port?", lines, theme::ACCENT);
+    modal::render(f, area, theme, "open which port?", lines, theme.accent);
 }
 
 /// "You are about to send SIGTERM to this" — the one irreversible thing whirr
 /// does, so it gets the red accent and spells out both what dies and how to
 /// back out.
-fn render_kill_dialog(f: &mut Frame, area: Rect, pid: i32, name: &str) {
+fn render_kill_dialog(f: &mut Frame, area: Rect, theme: &theme::Theme, pid: i32, name: &str) {
     let lines = vec![
-        Line::styled(name.to_string(), Style::default().fg(theme::TEXT).bold()),
-        Line::styled(format!("pid {pid}"), Style::default().fg(theme::DIM)),
+        Line::styled(name.to_string(), Style::default().fg(theme.text).bold()),
+        Line::styled(format!("pid {pid}"), Style::default().fg(theme.dim)),
         Line::from(""),
         Line::from(vec![
-            Span::styled("y", Style::default().fg(theme::RED).bold()),
-            Span::styled(" confirm", Style::default().fg(theme::TEXT)),
+            Span::styled("y", Style::default().fg(theme.red).bold()),
+            Span::styled(" confirm", Style::default().fg(theme.text)),
             Span::styled("   ", Style::default()),
-            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-            Span::styled(" cancel", Style::default().fg(theme::TEXT)),
+            Span::styled("n", Style::default().fg(theme.text).bold()),
+            Span::styled(" cancel", Style::default().fg(theme.text)),
         ]),
     ];
-    modal::render(f, area, "confirm kill", lines, theme::RED);
+    modal::render(f, area, theme, "confirm kill", lines, theme.red);
 }
 
 /// The gauge band. `Tier::Grid` stacks the four cards 2x2 — `Screen` only
@@ -210,10 +274,22 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     // would be a lie. The footer becomes the dialog's own key legend.
     if app.pending_kill.is_some() {
         let text = Line::from(vec![
-            Span::styled("y", Style::default().fg(theme::RED).bold()),
-            Span::styled(" confirm · ", Style::default().fg(theme::DIM)),
-            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-            Span::styled(" cancel", Style::default().fg(theme::DIM)),
+            Span::styled("y", Style::default().fg(app.theme.red).bold()),
+            Span::styled(" confirm · ", Style::default().fg(app.theme.dim)),
+            Span::styled("n", Style::default().fg(app.theme.text).bold()),
+            Span::styled(" cancel", Style::default().fg(app.theme.dim)),
+        ]);
+        f.render_widget(Paragraph::new(text), area);
+        return;
+    }
+    if app.settings_open {
+        let text = Line::from(vec![
+            Span::styled("↑↓", Style::default().fg(app.theme.accent).bold()),
+            Span::styled(" row · ", Style::default().fg(app.theme.dim)),
+            Span::styled("←→", Style::default().fg(app.theme.accent).bold()),
+            Span::styled(" change · ", Style::default().fg(app.theme.dim)),
+            Span::styled("esc", Style::default().fg(app.theme.text).bold()),
+            Span::styled(" close", Style::default().fg(app.theme.dim)),
         ]);
         f.render_widget(Paragraph::new(text), area);
         return;
@@ -222,11 +298,11 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         let text = Line::from(vec![
             Span::styled(
                 format!("1-{}", pick.ports.len()),
-                Style::default().fg(theme::ACCENT).bold(),
+                Style::default().fg(app.theme.accent).bold(),
             ),
-            Span::styled(" open · ", Style::default().fg(theme::DIM)),
-            Span::styled("n", Style::default().fg(theme::TEXT).bold()),
-            Span::styled(" cancel", Style::default().fg(theme::DIM)),
+            Span::styled(" open · ", Style::default().fg(app.theme.dim)),
+            Span::styled("n", Style::default().fg(app.theme.text).bold()),
+            Span::styled(" cancel", Style::default().fg(app.theme.dim)),
         ]);
         f.render_widget(Paragraph::new(text), area);
         return;
@@ -234,17 +310,37 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let show_sort = matches!(app.focus, Focus::Processes);
     let show_kill = matches!(app.focus, Focus::Processes | Focus::Localhost);
     let show_open = matches!(app.focus, Focus::Localhost);
-    let items: [Option<&str>; 6] = [
+    let items: [Option<&str>; 7] = [
         Some("↑↓ select"),
         show_sort.then_some("c/m sort"),
         show_open.then_some("o open"),
         show_kill.then_some("k kill"),
+        Some("s settings"),
         Some("tab focus"),
         Some("q quit"),
     ];
-    let text = items.into_iter().flatten().collect::<Vec<_>>().join(" · ");
+    // Shed hints rather than let the row overflow and clip. The panels
+    // already drop out in priority order as space gets tight; this is the
+    // same rule applied to the footer, and it exists because adding
+    // "s settings" pushed the row past 60 columns and silently cut "q quit"
+    // off the end — the one key nobody should have to guess.
+    //
+    // Dropped first to last: settings (discoverable elsewhere), select (the
+    // arrow keys are a safe guess), sort, then the card-specific actions.
+    // "tab focus" and "q quit" are never dropped.
+    const DROP_ORDER: [&str; 5] = ["s settings", "↑↓ select", "c/m sort", "o open", "k kill"];
+    let mut shown: Vec<&str> = items.into_iter().flatten().collect();
+    for victim in DROP_ORDER {
+        let width: usize =
+            shown.iter().map(|i| i.chars().count()).sum::<usize>() + 3 * shown.len().saturating_sub(1);
+        if width <= area.width as usize {
+            break;
+        }
+        shown.retain(|i| *i != victim);
+    }
+    let text = shown.join(" · ");
     let keys_width = text.chars().count();
-    f.render_widget(Paragraph::new(text).style(Style::default().fg(theme::DIM)), area);
+    f.render_widget(Paragraph::new(text).style(Style::default().fg(app.theme.dim)), area);
 
     // The update notice shares this row, right-aligned, and only when it can
     // do so without touching the keys. The keys are the working UI; a notice
@@ -256,7 +352,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         if area.width as usize >= keys_width + width + 2 {
             f.render_widget(
                 Paragraph::new(notice)
-                    .style(Style::default().fg(theme::AMBER))
+                    .style(Style::default().fg(app.theme.amber))
                     .alignment(Alignment::Right),
                 area,
             );

@@ -3,7 +3,7 @@ use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Focus, SortBy};
 use crate::units::fmt_bytes;
-use super::theme;
+
 
 pub fn micro_bar(pct: f32, width: usize) -> usize {
     ((pct / 100.0).clamp(0.0, 1.0) * width as f32).round() as usize
@@ -17,13 +17,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         SortBy::Cpu => "Processes ▾cpu",
         SortBy::Mem => "Processes ▾mem",
     };
-    let block = theme::panel_block(title, focused);
+    let block = app.theme.panel_block(title, focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let procs = app.processes();
     if procs.is_empty() {
-        f.render_widget(Paragraph::new("…").style(Style::default().fg(theme::DIM)), inner);
+        f.render_widget(Paragraph::new("…").style(Style::default().fg(app.theme.dim)), inner);
         return;
     }
     // The old always-on hint row moved to the global footer (see
@@ -35,7 +35,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // `ui::modal`); this line is left to `message`, which is a status report
     // and not a question.
     let status =
-        app.message.as_ref().map(|msg| Line::styled(msg.clone(), Style::default().fg(theme::AMBER)));
+        app.message.as_ref().map(|msg| Line::styled(msg.clone(), Style::default().fg(app.theme.amber)));
 
     let mem_total = app.fast.as_ref().map_or(1, |f| f.mem_total).max(1);
     let visible_rows = inner.height.saturating_sub(status.is_some() as u16) as usize;
@@ -46,11 +46,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     for (i, p) in procs.iter().enumerate().skip(offset).take(visible_rows) {
         let selected = cursor == Some(i);
         let base = if selected {
-            Style::default().fg(theme::TEXT).bg(theme::BG_CELL).bold()
+            Style::default().fg(app.theme.text).bg(app.theme.bg_cell).bold()
         } else if i == 0 {
-            Style::default().fg(theme::TEXT).bold()
+            Style::default().fg(app.theme.text).bold()
         } else {
-            Style::default().fg(theme::TEXT)
+            Style::default().fg(app.theme.text)
         };
         let cpu_fill = micro_bar(p.cpu, BAR_W);
         let mem_pct = (p.mem as f64 / mem_total as f64 * 100.0) as f32;
@@ -62,14 +62,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         // `Style::default().fg(..)`: `base` carries the selected row's
         // background, and a fresh style would drop it, leaving the bar cells
         // to fall through to the frame's BASE and cut two dark notches out of
-        // the highlight. Same reason `pid` uses `base.fg(theme::DIM)`.
+        // the highlight. Same reason `pid` uses `base.fg(app.theme.dim)`.
         lines.push(Line::from(vec![
-            Span::styled(format!("{:>6} ", p.pid), base.fg(theme::DIM)),
+            Span::styled(format!("{:>6} ", p.pid), base.fg(app.theme.dim)),
             Span::styled(format!("{:<24.24} ", p.name), base),
             Span::styled(format!("{:>5.1}% ", p.cpu), base),
-            Span::styled(bar(cpu_fill), base.fg(theme::gradient(p.cpu / 100.0))),
+            Span::styled(bar(cpu_fill), base.fg(app.theme.gradient(p.cpu / 100.0))),
             Span::styled(format!(" {:>9} ", fmt_bytes(p.mem)), base),
-            Span::styled(bar(mem_fill), base.fg(theme::gradient(mem_pct / 100.0))),
+            Span::styled(bar(mem_fill), base.fg(app.theme.gradient(mem_pct / 100.0))),
         ]));
     }
 

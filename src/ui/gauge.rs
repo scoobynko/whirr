@@ -10,19 +10,19 @@
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
-use super::{font, theme};
+use super::{font};
 
 /// Draw a gauge card's border and title; returns the area inside it.
-pub fn frame(f: &mut Frame, area: Rect, title: &str) -> Rect {
-    let block = theme::panel_block(title, false);
+pub fn frame(f: &mut Frame, area: Rect, theme: &super::theme::Theme, title: &str) -> Rect {
+    let block = theme.panel_block(title, false);
     let inner = block.inner(area);
     f.render_widget(block, area);
     inner
 }
 
 /// Fill a card whose sample hasn't arrived yet.
-pub fn unavailable(f: &mut Frame, inner: Rect) {
-    f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), inner);
+pub fn unavailable(f: &mut Frame, inner: Rect, theme: &super::theme::Theme) {
+    f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme.dim)), inner);
 }
 
 /// Rows a hero headline claims. Cards lay out around this, so it lives here
@@ -46,11 +46,15 @@ pub fn readout(f: &mut Frame, area: Rect, text: &str, color: Color) {
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::Terminal;
 
-    use super::super::theme;
+
     use crate::app::App;
 
     /// A gauge card's entry point, as `ui::draw` calls it.
@@ -78,7 +82,7 @@ mod tests {
             assert!(text.contains(title), "{title} card lost its title");
             assert!(text.contains("n/a"), "{title} card should say n/a with no sample");
             assert!(
-                buf.content().iter().all(|c| c.style().bg != Some(theme::ACCENT)),
+                buf.content().iter().all(|c| c.style().bg != Some(TH.accent)),
                 "{title} card painted a hero number with no data behind it"
             );
         }

@@ -6,12 +6,12 @@ use crate::units::{fmt_bytes, fmt_rate};
 use super::theme;
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let block = theme::panel_block("Network", false);
+    let block = app.theme.panel_block("Network", false);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
     let Some(fast) = app.fast.as_ref() else {
-        f.render_widget(Paragraph::new("n/a").style(Style::default().fg(theme::DIM)), inner);
+        f.render_widget(Paragraph::new("n/a").style(Style::default().fg(app.theme.dim)), inner);
         return;
     };
 
@@ -21,14 +21,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let rate_area = Rect { height: inner.height.min(1), ..inner };
     f.render_widget(
         Paragraph::new(Line::from(vec![
-            Span::styled(format!("▼ {}", fmt_rate(fast.net_rx_rate)), Style::default().fg(theme::ACCENT)),
+            Span::styled(format!("▼ {}", fmt_rate(fast.net_rx_rate)), Style::default().fg(app.theme.accent)),
             Span::styled(
                 format!("  ▲ {}", fmt_rate(fast.net_tx_rate)),
-                Style::default().fg(theme::gradient(0.55)),
+                Style::default().fg(app.theme.gradient(0.55)),
             ),
             Span::styled(
                 format!("  ∑ ▼{} ▲{}", fmt_bytes(fast.net_rx_total), fmt_bytes(fast.net_tx_total)),
-                Style::default().fg(theme::DIM),
+                Style::default().fg(app.theme.dim),
             ),
         ])),
         rate_area,
@@ -53,38 +53,50 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     if bands_height == 1 {
         // Only one row left: show download alone — the more informative of
         // the pair — rather than squeezing both bands into it.
-        render_band(f, bands_area, "▼", &down, max, theme::ACCENT);
+        render_band(f, bands_area, &app.theme, "▼", &down, max, app.theme.accent);
         return;
     }
 
     let up: Vec<u64> = app.net_hist.iter().map(|(_, tx)| tx as u64).collect();
     let bands = Layout::vertical([Constraint::Ratio(1, 2), Constraint::Ratio(1, 2)]).split(bands_area);
-    render_band(f, bands[0], "▼", &down, max, theme::ACCENT);
-    render_band(f, bands[1], "▲", &up, max, theme::gradient(0.55));
+    render_band(f, bands[0], &app.theme, "▼", &down, max, app.theme.accent);
+    render_band(f, bands[1], &app.theme, "▲", &up, max, app.theme.gradient(0.55));
 }
 
 /// One labeled sparkline band: a 2-col dim marker gutter then the sparkline.
 /// The marker sits on the band's baseline (bottom row) so it labels the bars,
 /// which grow up from the bottom, rather than floating above empty space.
-fn render_band(f: &mut Frame, area: Rect, marker: &str, data: &[u64], max: u64, color: Color) {
+fn render_band(
+    f: &mut Frame,
+    area: Rect,
+    theme: &theme::Theme,
+    marker: &str,
+    data: &[u64],
+    max: u64,
+    color: Color,
+) {
     let cols = Layout::horizontal([Constraint::Length(2), Constraint::Min(1)]).split(area);
     let gutter = cols[0];
     let marker_area = Rect { y: gutter.y + gutter.height.saturating_sub(1), height: 1, ..gutter };
     f.render_widget(
-        Paragraph::new(marker).style(Style::default().fg(theme::DIM)),
+        Paragraph::new(marker).style(Style::default().fg(theme.dim)),
         marker_area,
     );
-    super::spark::render(f, cols[1], data, max, Style::default().fg(color));
+    super::spark::render(f, cols[1], theme, data, max, Style::default().fg(color));
 }
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::layout::Rect;
     use ratatui::Terminal;
 
     use crate::app::App;
-    use super::theme;
+
 
     fn draw() -> Vec<String> {
         draw_at_inner_height(6)
@@ -174,8 +186,8 @@ mod tests {
             let area = f.area();
             let down = Rect { height: 1, ..area };
             let up = Rect { y: area.y + 1, height: 1, ..area };
-            super::render_band(f, down, "▼", &[8], 8, theme::ACCENT);
-            super::render_band(f, up, "▲", &[8], 8, theme::gradient(0.55));
+            super::render_band(f, down, &TH, "▼", &[8], 8, TH.accent);
+            super::render_band(f, up, &TH, "▲", &[8], 8, TH.gradient(0.55));
         })
         .unwrap();
         let buf = t.backend().buffer().clone();
@@ -186,8 +198,8 @@ mod tests {
         // block glyph, to avoid Terminal.app's seams (see `ui/spark.rs`).
         let down_bar = buf[(9, 0)].bg;
         let up_bar = buf[(9, 1)].bg;
-        assert_eq!(down_bar, theme::ACCENT, "download band's full-height bar should be its own accent colour");
-        assert_eq!(up_bar, theme::gradient(0.55), "upload band's full-height bar should be its own gradient colour, not accent");
+        assert_eq!(down_bar, TH.accent, "download band's full-height bar should be its own accent colour");
+        assert_eq!(up_bar, TH.gradient(0.55), "upload band's full-height bar should be its own gradient colour, not accent");
         assert_ne!(down_bar, up_bar, "the two bands must not collapse to the same colour");
     }
 

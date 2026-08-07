@@ -2,12 +2,12 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::app::App;
-use super::{font, gauge, theme};
+use super::{font, gauge};
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
-    let inner = gauge::frame(f, area, "Power");
+    let inner = gauge::frame(f, area, &app.theme, "Power");
     let Some(m) = app.medium.as_ref() else {
-        return gauge::unavailable(f, inner);
+        return gauge::unavailable(f, inner, &app.theme);
     };
 
     // The battery footer comes off the bottom first: it is the one row that
@@ -31,18 +31,18 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
             let total = p.cpu_w + p.gpu_w + p.ane_w;
             let text = format!("{total:.1} W");
             if hero {
-                gauge::hero(f, rows[0], &text, &format!("{total:.0} W"), theme::ACCENT);
+                gauge::hero(f, rows[0], &text, &format!("{total:.0} W"), app.theme.accent);
             } else {
-                gauge::readout(f, rows[0], &text, theme::ACCENT);
+                gauge::readout(f, rows[0], &text, app.theme.accent);
             }
             let legend = format!("cpu {:.1} · gpu {:.1} · ane {:.1}", p.cpu_w, p.gpu_w, p.ane_w);
             f.render_widget(
-                Paragraph::new(legend).style(Style::default().fg(theme::DIM)),
+                Paragraph::new(legend).style(Style::default().fg(app.theme.dim)),
                 rows[1],
             );
             render_spark(f, rows[2], app);
         }
-        None => gauge::unavailable(f, body),
+        None => gauge::unavailable(f, body, &app.theme),
     }
 
     let battery_line = match &m.battery {
@@ -62,7 +62,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
         None => String::new(), // desktop Mac: hide line
     };
     f.render_widget(
-        Paragraph::new(battery_line).style(Style::default().fg(theme::DIM)),
+        Paragraph::new(battery_line).style(Style::default().fg(app.theme.dim)),
         footer,
     );
 }
@@ -79,11 +79,15 @@ fn render_spark(f: &mut Frame, area: Rect, app: &App) {
     }
     let peak = app.power_hist.iter().map(|(c, g, a)| c + g + a).fold(1.0, f64::max) * 1.2;
     let max = (peak * 10.0).round() as u64;
-    super::spark::render(f, area, &data, max, Style::default().fg(theme::ACCENT));
+    super::spark::render(f, area, &app.theme, &data, max, Style::default().fg(app.theme.accent));
 }
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::buffer::Buffer;
     use ratatui::Terminal;
@@ -113,7 +117,7 @@ mod tests {
         let full = draw(40, 12); // inner 38x10 → hero
         let full_buf = draw_buffer(40, 12);
         let filled =
-            full_buf.content().iter().filter(|c| c.style().bg == Some(super::theme::ACCENT)).count();
+            full_buf.content().iter().filter(|c| c.style().bg == Some(TH.accent)).count();
         let expected: usize =
             crate::ui::font::big_text("7.9 W").iter().flat_map(|r| r.chars()).filter(|&c| c == '#').count();
         assert_eq!(filled, expected, "hero bitmap pixel count mismatch for \"7.9 W\"");
@@ -123,7 +127,7 @@ mod tests {
         assert!(compact.contains("7.9 W"));
         let compact_buf = draw_buffer(40, 10);
         let compact_filled =
-            compact_buf.content().iter().any(|c| c.style().bg == Some(super::theme::ACCENT));
+            compact_buf.content().iter().any(|c| c.style().bg == Some(TH.accent));
         assert!(!compact_filled, "compact tier must not paint any hero bitmap pixels");
     }
 

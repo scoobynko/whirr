@@ -1,6 +1,6 @@
 use ratatui::prelude::*;
 
-use super::theme;
+
 
 /// Block levels from empty to full, indexed by eighths (0..=8).
 const LEVELS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
@@ -15,7 +15,14 @@ const LEVELS: [&str; 9] = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇",
 /// right-anchored instead of left-aligned — the newest sample must stay at
 /// the right edge, and the empty left space must stay genuinely blank rather
 /// than fake zero-value bars.
-pub fn render(f: &mut Frame, area: Rect, data: &[u64], max: u64, style: Style) {
+pub fn render(
+    f: &mut Frame,
+    area: Rect,
+    theme: &super::theme::Theme,
+    data: &[u64],
+    max: u64,
+    style: Style,
+) {
     if area.width == 0 || area.height == 0 || data.is_empty() {
         return;
     }
@@ -37,7 +44,7 @@ pub fn render(f: &mut Frame, area: Rect, data: &[u64], max: u64, style: Style) {
         // Same bottom-up fill ratatui's Sparkline used: each row consumes up
         // to 8 eighths of `height`, starting from the bottom row.
         let mut height = value * u64::from(area.height) * 8 / max;
-        let bar_colour = style.fg.map(|fg| theme::ramp(fg, value as f32 / max as f32));
+        let bar_colour = style.fg.map(|fg| theme.ramp(fg, value as f32 / max as f32));
         let bar_style = match bar_colour {
             Some(c) => style.fg(c),
             None => style,
@@ -78,11 +85,15 @@ pub fn render(f: &mut Frame, area: Rect, data: &[u64], max: u64, style: Style) {
 
 #[cfg(test)]
 mod tests {
+    /// The palette the app starts with; tests assert against it by name
+    /// rather than against raw RGB triples.
+    const TH: crate::ui::theme::Theme = crate::ui::theme::Theme::dark();
+
     use ratatui::backend::TestBackend;
     use ratatui::prelude::*;
     use ratatui::Terminal;
 
-    use super::theme;
+
     use ratatui::style::Color;
 
     /// Render with a real foreground colour, as every production caller does.
@@ -94,7 +105,7 @@ mod tests {
     /// emits.
     fn draw_cells(data: &[u64], max: u64, w: u16, h: u16) -> (String, Vec<bool>) {
         let mut t = Terminal::new(TestBackend::new(w, h)).unwrap();
-        t.draw(|f| super::render(f, f.area(), data, max, Style::default().fg(theme::ACCENT)))
+        t.draw(|f| super::render(f, f.area(), &TH, data, max, Style::default().fg(TH.accent)))
             .unwrap();
         let buf = t.backend().buffer().clone();
         let symbols = buf.content().iter().map(|c| c.symbol()).collect();
@@ -192,7 +203,7 @@ mod tests {
         // must make the tall bar visibly brighter than the short one.
         let mut t = Terminal::new(TestBackend::new(2, 1)).unwrap();
         t.draw(|f| {
-            super::render(f, f.area(), &[1, 8], 8, Style::default().fg(theme::ACCENT))
+            super::render(f, f.area(), &TH, &[1, 8], 8, Style::default().fg(TH.accent))
         })
         .unwrap();
         let buf = t.backend().buffer().clone();
@@ -201,7 +212,7 @@ mod tests {
         let short = buf[(0, 0)].fg;
         let tall = buf[(1, 0)].bg;
         assert_ne!(short, tall, "short and tall bars in the same chart must not share a flat colour");
-        assert_eq!(tall, theme::ACCENT, "the tallest bar should render in the full caller colour");
+        assert_eq!(tall, TH.accent, "the tallest bar should render in the full caller colour");
     }
 
     #[test]
@@ -210,7 +221,7 @@ mod tests {
         // fraction of the peak) must still render clearly apart from BASE,
         // not fade into the background it's blended toward.
         let mut t = Terminal::new(TestBackend::new(1, 8)).unwrap();
-        t.draw(|f| super::render(f, f.area(), &[1], 64, Style::default().fg(theme::ACCENT)))
+        t.draw(|f| super::render(f, f.area(), &TH, &[1], 64, Style::default().fg(TH.accent)))
             .unwrap();
         let buf = t.backend().buffer().clone();
         let fg = buf[(0, 7)].fg; // bottom row: the one filled eighth
@@ -218,9 +229,9 @@ mod tests {
             Color::Rgb(r, g, b) => (i32::from(r), i32::from(g), i32::from(b)),
             _ => panic!(),
         };
-        let (r0, g0, b0) = ch(theme::BASE);
+        let (r0, g0, b0) = ch(TH.base);
         let (r1, g1, b1) = ch(fg);
         let dist = (r1 - r0).abs() + (g1 - g0).abs() + (b1 - b0).abs();
-        assert!(dist > 20, "lowest non-zero bar colour {fg:?} too close to BASE {:?}", theme::BASE);
+        assert!(dist > 20, "lowest non-zero bar colour {fg:?} too close to BASE {:?}", TH.base);
     }
 }

@@ -77,6 +77,7 @@ network, then power, then temperature. Processes and CPU always survive.
 | `c` / `m` | sort processes by CPU / memory |
 | `o` | open the selected dev server in your browser (localhost card only) |
 | `k` | kill the selected process or dev server (SIGTERM; a dialog asks first — `y` confirms, `n` or `Esc` cancels) |
+| `s` | open settings: theme, accent colour, background, fan |
 | `q` / `Ctrl-C` | quit |
 
 `k` is deliberately inert on the Claude sessions and others cards: ending a
@@ -114,6 +115,43 @@ crates.io requires), it runs on its own thread so it can never delay startup
 or a redraw, and the answer is cached in
 `~/.cache/whirr/update-check`. Turn it off with `--no-update-check`, and
 whirr makes no network requests at all.
+
+## Settings
+
+`s` opens a dialog for the things that are a matter of taste: a light or dark
+palette, one of five accent colours, whether the fan animates, and whether
+whirr paints the frame background at all.
+
+That last one matters if your terminal is themed or translucent — whirr paints
+edge to edge by default, which overrides it. Set **background** to `terminal`
+and the frame is left alone.
+
+It's only offered under the dark palette. Light means dark text, and leaving
+the frame unpainted would put that text straight onto whatever your terminal's
+background is — unreadable on a dark one, and whirr has no reliable way to
+find out which you have. Choosing light shows the row as `painted (light)`;
+your `terminal` preference is kept, not discarded, and comes back when you
+switch to dark.
+
+Changes apply as you make them and are remembered in
+`~/.config/whirr/config.toml` (or `$XDG_CONFIG_HOME/whirr/`):
+
+```toml
+[appearance]
+theme = "dark"        # dark | light
+accent = "teal"       # teal | blue | violet | amber | green
+background = "painted" # painted | terminal (dark palette only)
+
+[behaviour]
+fan = true
+```
+
+The file is optional and edits to it are picked up on the next launch. A value
+whirr doesn't recognise is ignored and that one setting falls back to its
+default — a typo in the accent won't discard your theme — and an unparseable
+file is ignored entirely rather than being an error worth refusing to start
+over. Flags win over the file, so `--no-fan` applies for that run without
+rewriting your preference.
 
 ## Performance budget
 
