@@ -20,15 +20,24 @@ const TICK: Duration = Duration::from_secs(10);
 /// the project name — reading titles out of AppleScript would mean *waiting*
 /// on it, which can block for minutes.
 fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
-    let Some(first) = sessions.first() else { return };
-    let parents = crate::host::parent_map();
-    let Some(host) = crate::host::detect_with(first.pid, &parents) else { return };
-    let surfaces = crate::host::surfaces(&host);
-    if surfaces.is_empty() {
+    if sessions.is_empty() {
         return;
     }
+    let parents = crate::host::parent_map();
+    // Detected per session, not once for the whole list. Sessions can live in
+    // different terminals at the same time, and asking only the first one's
+    // host meant a single session in a terminal that cannot answer stripped
+    // the titles off every other row.
+    //
+    // Cached by bundle so the host is still only *queried* once per distinct
+    // terminal, however many sessions it holds.
+    let mut by_host: BTreeMap<std::path::PathBuf, Vec<crate::host::Surface>> = BTreeMap::new();
     for s in sessions.iter_mut() {
-        let Some(tty) = s.tty.as_deref() else { continue };
+        let Some(tty) = s.tty.clone() else { continue };
+        let Some(host) = crate::host::detect_with(s.pid, &parents) else { continue };
+        let surfaces = by_host
+            .entry(host.bundle.clone())
+            .or_insert_with(|| crate::host::surfaces(&host));
         if let Some(m) = surfaces.iter().find(|x| x.tty == tty) {
             if !m.title.is_empty() {
                 s.title = Some(m.title.clone());

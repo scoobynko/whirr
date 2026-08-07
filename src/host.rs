@@ -160,10 +160,13 @@ pub fn parse_cmux_tree(text: &str) -> Vec<Surface> {
     let mut out = Vec::new();
     let mut pane = String::new();
     for line in text.lines() {
-        if let Some(rest) = after(line, "pane pane:") {
-            let n: String = rest.chars().take_while(|c| c.is_ascii_digit()).collect();
-            if !n.is_empty() {
-                pane = format!("pane:{n}");
+        if let Some(rest) = after(line, "pane ") {
+            // The ref is whatever follows: a UUID when asked for one, a short
+            // `pane:N` otherwise. Both are taken verbatim — whirr never has
+            // to understand them, only hand them back.
+            let r: String = rest.chars().take_while(|c| !c.is_whitespace()).collect();
+            if !r.is_empty() {
+                pane = r;
             }
         }
         let Some(rest) = after(line, "tty=") else { continue };
@@ -195,7 +198,12 @@ fn after<'a>(haystack: &'a str, needle: &str) -> Option<&'a str> {
 pub fn surfaces(host: &Host) -> Vec<Surface> {
     match &host.kind {
         HostKind::Cmux { cli } => Command::new(cli)
-            .args(["tree", "--all"])
+            // UUIDs, not the default short refs. `tree` numbers panes in a
+            // different index space from the one `focus-pane` resolves
+            // against — `pane:1` from the tree is rejected outright with
+            // "not_found: Pane not found", which is exactly what the first
+            // version shipped. UUIDs are the same identity everywhere.
+            .args(["tree", "--all", "--id-format", "uuids"])
             .output()
             .ok()
             .filter(|o| o.status.success())
@@ -301,6 +309,26 @@ mod tests {
         assert_eq!(s[1].pane, "pane:3", "first pane of the workspace");
         assert_eq!(s[2].pane, "pane:4", "second pane, not the first");
         assert_eq!(s[2].title, "pnpm storybook");
+    }
+
+    /// The same tree as cmux emits it with `--id-format uuids`, which is what
+    /// whirr actually asks for.
+    const TREE_UUIDS: &str = r#"window 93BDC693-78DF-43EE-8FA6-629E914F6F5C [current] ◀ active
+├── workspace 7EFF925B-26FA-46FC-A7A1-3D323C993933 "Group 1"
+│   └── pane 631A76B5-FCA4-403C-A182-BD65976F018A [focused]
+│       └── surface 63ECCA0C-6DAD-4A22-9C63-5C15DE4EE734 [terminal] "…/Projects/axterio" [selected] tty=ttys011
+"#;
+
+    #[test]
+    fn a_uuid_pane_ref_is_carried_through_verbatim() {
+        // The bug that shipped: `tree` numbers panes in a different index
+        // space from the one `focus-pane` resolves against, so the short
+        // `pane:1` was rejected with "not_found: Pane not found". UUIDs are
+        // the same identity everywhere, and whirr never interprets them.
+        let s = parse_cmux_tree(TREE_UUIDS);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].pane, "631A76B5-FCA4-403C-A182-BD65976F018A");
+        assert_eq!(s[0].tty, "ttys011");
     }
 
     #[test]
