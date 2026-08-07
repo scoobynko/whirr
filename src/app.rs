@@ -314,7 +314,12 @@ impl App {
                     }
                     self.pending_kill = None;
                 }
-                _ => self.pending_kill = None,
+                KeyCode::Char('n') | KeyCode::Esc => self.pending_kill = None,
+                // Every other key is ignored rather than treated as a cancel.
+                // Cancelling on anything-but-y meant an arrow or a Tab
+                // dismissed the question silently, and the next `k` read as
+                // having done nothing. A dialog answers the keys it offers.
+                _ => {}
             }
             return;
         }
@@ -495,6 +500,27 @@ mod tests {
         assert!(a.pending_kill.is_some());
         a.on_key(key('n'));
         assert!(a.pending_kill.is_none());
+    }
+
+    #[test]
+    fn esc_cancels_a_pending_kill() {
+        let mut a = app_with_procs();
+        a.on_key(key('k'));
+        a.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(a.pending_kill.is_none(), "Esc is the other obvious way out of a dialog");
+    }
+
+    #[test]
+    fn keys_the_dialog_does_not_offer_leave_it_standing() {
+        // It used to cancel on *any* key but `y`, so an arrow or a Tab
+        // dismissed the question silently and the next `k` looked like it had
+        // done nothing. A dialog should answer only the keys it advertises.
+        for k in [KeyCode::Down, KeyCode::Up, KeyCode::Tab, KeyCode::Char('c')] {
+            let mut a = app_with_procs();
+            a.on_key(key('k'));
+            a.on_key(KeyEvent::from(k));
+            assert!(a.pending_kill.is_some(), "{k:?} should not dismiss the dialog");
+        }
     }
 
     #[test]

@@ -76,7 +76,7 @@ network, then power, then temperature. Processes and CPU always survive.
 | `↑` / `↓` | move the selection within the focused card |
 | `c` / `m` | sort processes by CPU / memory |
 | `o` | open the selected dev server in your browser (localhost card only) |
-| `k` | kill the selected process or dev server (SIGTERM, `y`/`n` to confirm) |
+| `k` | kill the selected process or dev server (SIGTERM; a dialog asks first — `y` confirms, `n` or `Esc` cancels) |
 | `q` / `Ctrl-C` | quit |
 
 `k` is deliberately inert on the Claude sessions and others cards: ending a
