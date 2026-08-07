@@ -6,6 +6,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.7
+
+_2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.6...v0.3.7)_
+
+
+### Added
+
+- *(ui)* Settings dialog for theme, accent, background and fan ([62d1ec5](https://github.com/scoobynko/whirr/commit/62d1ec51847d173dd67f7ea4b24f339f1100879f))
+- *(settings)* Remember the choices between runs ([dfdd8ce](https://github.com/scoobynko/whirr/commit/dfdd8ce44cfe45774744ff1d7e9806ecdd0cd2d5))
+
+### Changed
+
+- *(ui)* Make the palette a value instead of eleven constants ([1efef65](https://github.com/scoobynko/whirr/commit/1efef65bd10e963339209f0d79c266f7972deb7f))
+
+### Fixed
+
+- *(settings)* Terminal background is dark-palette only ([0455a0b](https://github.com/scoobynko/whirr/commit/0455a0bd0d1145e9729e85d906dc75c5fbce0afc))
 ## v0.3.6
 
 _2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.5...v0.3.6)_
