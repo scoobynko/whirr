@@ -46,8 +46,9 @@ KEYS (while running):
     ↑ ↓        move the selection within the focused card
     tab        cycle focus between cards
     c / m      sort processes by CPU / memory
-    o          open the selected dev server in your browser (asks which
+    o          localhost: open the dev server in your browser (asks which
                port when the row offers more than one)
+               sessions:  jump to the terminal the session is running in
     k          kill the selected process or dev server (a dialog asks first)
     s          settings: theme, accent colour, background, fan
     q          quit
@@ -149,7 +150,9 @@ fn main() -> io::Result<()> {
         // a captive-portal network, and the dashboard must not wait for it.
         whirr::update::spawn(tx.clone());
     }
-    sampler::spawn_samplers(tx);
+    // Kept for the background actions below: the samplers take a clone, not
+    // the original, so the event loop can still send on it.
+    sampler::spawn_samplers(tx.clone());
 
     let mut app = App::new(no_fan);
     app.load_settings(no_fan);
@@ -179,6 +182,28 @@ fn main() -> io::Result<()> {
                     // rewrite the real config just by pressing keys.
                     if let Some(settings) = app.take_settings_save() {
                         settings.save();
+                    }
+                    // Off the render loop entirely: finding the host reads the
+                    // whole process table, and the AppleScript path can hang
+                    // for minutes on an unanswered permission prompt.
+                    if let Some((pid, tty)) = app.take_focus_request() {
+                        let tx = tx.clone();
+                        std::thread::spawn(move || {
+                            // Anything other than a clean jump is reported.
+                            // The fallback rung activates an app the user is
+                            // often already inside, which is indistinguishable
+                            // from nothing happening unless whirr says so.
+                            let problem = match whirr::host::detect(pid) {
+                                Some(host) => {
+                                    let surfaces = whirr::host::surfaces(&host);
+                                    whirr::host::focus(&host, tty.as_deref(), &surfaces).err()
+                                }
+                                None => Some("couldn't tell which terminal that session is in".into()),
+                            };
+                            if let Some(text) = problem {
+                                let _ = tx.send(whirr::sampler::Snapshot::Notice(text));
+                            }
+                        });
                     }
                 }
                 Event::Resize(_, _) => app.dirty = true,

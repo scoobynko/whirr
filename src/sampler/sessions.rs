@@ -24,6 +24,17 @@ pub struct ClaudeSession {
     pub pid: i32,
     /// Project directory basename — the thing the user recognises.
     pub project: String,
+    /// What the hosting terminal calls this session, when it can say. cmux
+    /// titles a workspace with the task the session is working on, which is
+    /// worth far more than a project directory or a tty.
+    pub title: Option<String>,
+    /// Whether the host can actually put this session's tab in front.
+    ///
+    /// False when no surface matches, which does happen — cmux does not
+    /// report one for every tty. Merely activating the application does not
+    /// count: whirr is often running inside that same app, so it looks
+    /// identical to a key that does nothing.
+    pub jumpable: bool,
     /// Controlling terminal, e.g. `ttys021`. This is what distinguishes two
     /// sessions in the same project: it says which pane to go to.
     pub tty: Option<String>,
@@ -52,6 +63,9 @@ pub fn build_sessions(facts: &[SessionFacts]) -> Vec<ClaudeSession> {
                 // least something the user can act on.
                 .unwrap_or_else(|| format!("pid {}", f.pid)),
             tty: f.tty.clone(),
+            // Both filled in by `slow.rs` once the host has been asked.
+            title: None,
+            jumpable: false,
         })
         .collect();
     out.sort_by(|a, b| {

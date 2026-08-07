@@ -106,6 +106,11 @@ pub struct App {
     /// keys by the hundred. `App` decides *what* to open; `main` does the
     /// opening.
     open_request: Option<String>,
+    /// A session the `o` key asked to jump to: its pid, and its tty if it has
+    /// one. Drained by the event loop, which does the work on its own thread
+    /// — finding the host reads the process table, and the AppleScript path
+    /// can hang for minutes on a permission prompt.
+    focus_request: Option<(i32, Option<String>)>,
     pub message: Option<String>,
     /// The burst's inner-ring rotation in degrees, wrapped to `0.0..360.0`.
     /// The outer ring is its negation, so one accumulator drives both. Thermal:
@@ -138,6 +143,7 @@ impl App {
             pending_kill: None,
             pending_port_pick: None,
             open_request: None,
+            focus_request: None,
             message: None,
             fan_angle_deg: 0.0,
             should_quit: false,
@@ -300,10 +306,10 @@ impl App {
                 },
             ],
             sessions: vec![
-                ClaudeSession { pid: 601, project: "axterio".into(), tty: Some("ttys020".into()) },
-                ClaudeSession { pid: 602, project: "axterio".into(), tty: Some("ttys021".into()) },
-                ClaudeSession { pid: 603, project: "whirr".into(), tty: Some("ttys004".into()) },
-                ClaudeSession { pid: 604, project: "eye-claudius".into(), tty: None },
+                ClaudeSession { pid: 601, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys020".into()) },
+                ClaudeSession { pid: 602, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys021".into()) },
+                ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), jumpable: true, tty: Some("ttys004".into()) },
+                ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, jumpable: false, tty: None },
             ],
             stale: false,
         }));
@@ -338,6 +344,10 @@ impl App {
             }
             Snapshot::Slow(s) => self.slow = Some(s),
             Snapshot::Update(u) => self.update = Some(u),
+            Snapshot::Notice(text) => {
+                self.message = Some(text);
+                self.dirty = true;
+            }
         }
         self.dirty = true;
     }
@@ -516,6 +526,13 @@ impl App {
             // `selected()` is the *focused* panel's cursor, so an ungated arm
             // would index the localhost list with the process cursor and open
             // whatever happened to sit at that offset.
+            // The sessions card has no URL, but it does have somewhere to
+            // go: the terminal the session is running in.
+            KeyCode::Char('o') if matches!(self.focus, Focus::Sessions) => {
+                if let Some(s) = self.sessions().get(self.selected()).filter(|s| s.jumpable) {
+                    self.focus_request = Some((s.pid, s.tty.clone()));
+                }
+            }
             KeyCode::Char('o') if matches!(self.focus, Focus::Localhost) => {
                 // Scoped: `localhost_rows` borrows self, and both arms below
                 // write to it.
@@ -545,6 +562,17 @@ impl App {
     /// and host are never in question — only the port ever was.
     fn localhost_url(port: u16) -> String {
         format!("http://localhost:{port}")
+    }
+
+    /// Whether the focused session's terminal can be put in front. Drives
+    /// both the `o` key and whether the footer offers it.
+    pub fn selected_session_is_jumpable(&self) -> bool {
+        self.sessions().get(self.selected()).is_some_and(|s| s.jumpable)
+    }
+
+    /// Take the pending jump-to-session request, if any.
+    pub fn take_focus_request(&mut self) -> Option<(i32, Option<String>)> {
+        self.focus_request.take()
     }
 
     /// Take the pending open request, if any. The event loop calls this after
@@ -1075,6 +1103,42 @@ mod tests {
             a.select(0);
             press(&mut a, 'o');
             assert_eq!(a.take_open_request(), None, "{focus:?} has no URL to open");
+        }
+    }
+
+    #[test]
+    fn o_on_a_session_asks_to_jump_to_its_terminal() {
+        let mut a = App::demo();
+        a.focus = Focus::Sessions;
+        a.select(0); // axterio on ttys020
+        press(&mut a, 'o');
+        assert_eq!(a.take_focus_request(), Some((601, Some("ttys020".into()))));
+        assert_eq!(a.take_focus_request(), None, "the request is taken once");
+        assert_eq!(a.take_open_request(), None, "a session is not a URL");
+    }
+
+    #[test]
+    fn a_session_the_host_cannot_reach_does_not_offer_the_key() {
+        // Merely activating the application is not a jump: whirr is often
+        // running inside that same app, so it is indistinguishable from a key
+        // that does nothing — which is exactly how it was reported.
+        let mut a = App::demo();
+        a.focus = Focus::Sessions;
+        a.select(3); // eye-claudius: no tty, so no surface can match
+        assert!(!a.selected_session_is_jumpable());
+        press(&mut a, 'o');
+        assert_eq!(a.take_focus_request(), None, "the key must be inert, not hopeful");
+    }
+
+    #[test]
+    fn o_is_still_inert_where_there_is_nowhere_to_go() {
+        for focus in [Focus::Processes, Focus::Others] {
+            let mut a = App::demo();
+            a.focus = focus;
+            a.select(0);
+            press(&mut a, 'o');
+            assert_eq!(a.take_focus_request(), None, "{focus:?}");
+            assert_eq!(a.take_open_request(), None, "{focus:?}");
         }
     }
 

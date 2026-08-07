@@ -309,7 +309,16 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     }
     let show_sort = matches!(app.focus, Focus::Processes);
     let show_kill = matches!(app.focus, Focus::Processes | Focus::Localhost);
-    let show_open = matches!(app.focus, Focus::Localhost);
+    // On localhost it opens a URL; on sessions it jumps to the terminal the
+    // session is running in. Same verb, same key.
+    // On sessions the key only appears when the host can actually put that
+    // tab in front. Offering it otherwise means a key that does nothing, or
+    // an app brought forward that whirr is already inside.
+    let show_open = match app.focus {
+        Focus::Localhost => true,
+        Focus::Sessions => app.selected_session_is_jumpable(),
+        _ => false,
+    };
     let items: [Option<&str>; 7] = [
         Some("↑↓ select"),
         show_sort.then_some("c/m sort"),

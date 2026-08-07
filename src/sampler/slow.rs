@@ -13,6 +13,48 @@ const TICK: Duration = Duration::from_secs(10);
 /// Walk every pid, keep the Claude processes, and read what the session card
 /// needs. `exec_path` is one cheap syscall per pid — deliberately not `args`,
 /// whose argv buffer would make a full-system walk expensive.
+/// Ask the hosting terminal what it calls each session, and attach that.
+///
+/// One `ps` and one host query per tick, and only when there are sessions to
+/// label. Hosts that cannot answer cheaply return nothing and the rows keep
+/// the project name — reading titles out of AppleScript would mean *waiting*
+/// on it, which can block for minutes.
+fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
+    if sessions.is_empty() {
+        return;
+    }
+    let parents = crate::host::parent_map();
+    // Detected per session, not once for the whole list. Sessions can live in
+    // different terminals at the same time, and asking only the first one's
+    // host meant a single session in a terminal that cannot answer stripped
+    // the titles off every other row.
+    //
+    // Cached by bundle so the host is still only *queried* once per distinct
+    // terminal, however many sessions it holds.
+    let mut by_host: BTreeMap<std::path::PathBuf, Vec<crate::host::Surface>> = BTreeMap::new();
+    for s in sessions.iter_mut() {
+        let Some(tty) = s.tty.clone() else { continue };
+        let Some(host) = crate::host::detect_with(s.pid, &parents) else { continue };
+        let surfaces = by_host
+            .entry(host.bundle.clone())
+            .or_insert_with(|| crate::host::surfaces(&host));
+        match surfaces.iter().find(|x| x.tty == tty) {
+            Some(m) => {
+                s.jumpable = true;
+                if !m.title.is_empty() {
+                    s.title = Some(m.title.clone());
+                }
+            }
+            // A scriptable terminal cannot be asked cheaply whether it holds
+            // this tty, so it is taken at its word; anything else offers no
+            // way to select a tab and must not advertise one.
+            None => {
+                s.jumpable = matches!(host.kind, crate::host::HostKind::AppleScript { .. })
+            }
+        }
+    }
+}
+
 fn scan_sessions() -> Vec<sessions::ClaudeSession> {
     let facts: Vec<sessions::SessionFacts> = crate::mac::proc::list_all_pids()
         .into_iter()
@@ -137,7 +179,8 @@ pub fn run(tx: Sender<Snapshot>) {
         // full pid walk that never consults lsof. Scanning them separately is
         // what keeps an lsof failure — or a machine with no listening sockets
         // at all — from blanking the sessions card.
-        let sessions = scan_sessions();
+        let mut sessions = scan_sessions();
+        attach_titles(&mut sessions);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;

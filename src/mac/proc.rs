@@ -278,6 +278,20 @@ pub fn tty(pid: i32) -> Option<Option<String>> {
     Some(tty)
 }
 
+/// `pid`'s parent, from the same `PROC_PIDTBSDINFO` call `tty` uses.
+///
+/// Walking this chain is how whirr finds the application hosting a terminal
+/// session: the shell's parent is `login`, whose parent is the terminal app
+/// itself. `None` means the pid could not be inspected.
+pub fn ppid(pid: i32) -> Option<i32> {
+    let mut i = ProcBsdInfo::default();
+    let sz = std::mem::size_of::<ProcBsdInfo>() as libc::c_int;
+    let r = unsafe {
+        proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &mut i as *mut _ as *mut libc::c_void, sz)
+    };
+    (r == sz).then_some(i.pbi_ppid as i32)
+}
+
 /// Every visible pid. Grows its buffer until the kernel's answer fits.
 pub fn list_all_pids() -> Vec<i32> {
     let mut buf = vec![0i32; 2048];
@@ -373,6 +387,38 @@ mod tests {
         if let Some(name) = &t {
             assert!(name.starts_with("tty") || name.starts_with("cons"), "odd tty name: {name}");
         }
+    }
+
+    #[test]
+    fn ppid_of_self_is_the_test_runners_parent() {
+        let me = std::process::id() as i32;
+        let parent = super::ppid(me).expect("own pid must be inspectable");
+        assert!(parent > 0, "every process has a parent, got {parent}");
+        assert_ne!(parent, me, "a process is not its own parent");
+    }
+
+    #[test]
+    fn ppid_of_an_uninspectable_pid_is_none() {
+        assert_eq!(super::ppid(-1), None);
+    }
+
+    #[test]
+    fn the_parent_chain_terminates_at_launchd() {
+        // The walk `host::detect` does. Two things must hold: it terminates,
+        // and it tolerates an ancestor it cannot read — not every process up
+        // the chain belongs to this user, and a walk that unwraps there would
+        // panic on someone else's machine rather than simply finding nothing.
+        let mut pid = std::process::id() as i32;
+        let mut seen = 0;
+        while pid > 1 && seen < 64 {
+            match super::ppid(pid) {
+                Some(parent) if parent != pid => pid = parent,
+                // Unreadable, or its own parent: either way the walk is over.
+                _ => break,
+            }
+            seen += 1;
+        }
+        assert!(seen < 64, "the walk did not terminate");
     }
 
     #[test]

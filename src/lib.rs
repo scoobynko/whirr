@@ -11,5 +11,6 @@ pub mod mac;
 pub mod app;
 pub mod sampler;
 pub mod ui;
+pub mod host;
 pub mod settings;
 pub mod update;

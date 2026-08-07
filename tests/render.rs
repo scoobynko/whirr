@@ -731,16 +731,56 @@ fn footer_kill_shows_only_for_killable_panels() {
 }
 
 #[test]
-fn footer_open_shows_only_for_localhost() {
-    let c = draw_app_at(&demo_with_focus(Focus::Localhost), 120, 40);
-    assert!(c.contains("o open"), "Localhost should show o open");
-    for focus in [Focus::Processes, Focus::Sessions, Focus::Others] {
+fn footer_open_shows_for_the_two_cards_that_have_somewhere_to_go() {
+    // Localhost opens a URL; Sessions jumps to the terminal the session runs
+    // in. Same verb, same key.
+    for focus in [Focus::Localhost, Focus::Sessions] {
         let c = draw_app_at(&demo_with_focus(focus), 120, 40);
-        assert!(
-            !c.contains("o open"),
-            "{focus:?} must not show o open — only a dev server has a URL"
-        );
+        assert!(c.contains("o open"), "{focus:?} should show o open");
     }
+    for focus in [Focus::Processes, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(!c.contains("o open"), "{focus:?} has nowhere to go");
+    }
+}
+
+#[test]
+fn a_titled_session_shows_the_project_as_well_as_the_title() {
+    // The title says what the session is doing; the project says which
+    // codebase it is doing it in. Two sessions can easily be doing similar
+    // things in different repos, so neither replaces the other.
+    let g = draw_grid_app(&App::demo(), 160, 45);
+    let row = g
+        .iter()
+        .find(|l| l.contains("Fix the port picker"))
+        .expect("the host's own title should be shown");
+    assert!(row.contains("whirr"), "the project should still be on the row: {row:?}");
+}
+
+#[test]
+fn the_footer_hides_open_for_a_session_the_host_cannot_reach() {
+    // A key that does nothing is worse than no key. cmux does not report a
+    // surface for every tty, and merely activating the app looks identical to
+    // a dead keypress when whirr is running inside it.
+    let mut app = demo_with_focus(Focus::Sessions);
+    app.select(3); // eye-claudius: no tty, so nothing can match
+    assert!(!app.selected_session_is_jumpable());
+    let c = draw_app_at(&app, 120, 40);
+    assert!(!c.contains("o open"), "an unreachable session must not advertise the key");
+
+    app.select(0); // axterio: reachable
+    let c = draw_app_at(&app, 120, 40);
+    assert!(c.contains("o open"), "a reachable one should");
+}
+
+#[test]
+fn a_titled_session_needs_no_tty_beside_it() {
+    // The tty exists to tell identical rows apart. A title already does that,
+    // so showing both would be answering a question nobody has.
+    let c = draw_app_at(&App::demo(), 160, 45);
+    assert!(!c.contains("ttys004"), "the titled session should not also carry its tty");
+    // The two untitled, same-project rows still do.
+    assert!(c.contains("ttys020") && c.contains("ttys021"), "the collision still needs them");
 }
 
 #[test]

@@ -13,6 +13,10 @@ pub enum Snapshot {
     /// A newer release exists. Arrives at most once per run, on its own
     /// thread, and only when there is something to say.
     Update(crate::update::Update),
+    /// Something a background action wants to say — currently only the
+    /// jump-to-session key, which runs off the render loop and so cannot
+    /// report its outcome any other way.
+    Notice(String),
 }
 
 #[derive(Clone)]
