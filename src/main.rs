@@ -46,8 +46,9 @@ KEYS (while running):
     ↑ ↓        move the selection within the focused card
     tab        cycle focus between cards
     c / m      sort processes by CPU / memory
-    o          open the selected dev server in your browser (asks which
+    o          localhost: open the dev server in your browser (asks which
                port when the row offers more than one)
+               sessions:  jump to the terminal the session is running in
     k          kill the selected process or dev server (a dialog asks first)
     s          settings: theme, accent colour, background, fan
     q          quit
@@ -179,6 +180,17 @@ fn main() -> io::Result<()> {
                     // rewrite the real config just by pressing keys.
                     if let Some(settings) = app.take_settings_save() {
                         settings.save();
+                    }
+                    // Off the render loop entirely: finding the host reads the
+                    // whole process table, and the AppleScript path can hang
+                    // for minutes on an unanswered permission prompt.
+                    if let Some((pid, tty)) = app.take_focus_request() {
+                        std::thread::spawn(move || {
+                            if let Some(host) = whirr::host::detect(pid) {
+                                let surfaces = whirr::host::surfaces(&host);
+                                whirr::host::focus(&host, tty.as_deref(), &surfaces);
+                            }
+                        });
                     }
                 }
                 Event::Resize(_, _) => app.dirty = true,

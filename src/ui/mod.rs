@@ -309,7 +309,9 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     }
     let show_sort = matches!(app.focus, Focus::Processes);
     let show_kill = matches!(app.focus, Focus::Processes | Focus::Localhost);
-    let show_open = matches!(app.focus, Focus::Localhost);
+    // On localhost it opens a URL; on sessions it jumps to the terminal the
+    // session is running in. Same verb, same key.
+    let show_open = matches!(app.focus, Focus::Localhost | Focus::Sessions);
     let items: [Option<&str>; 7] = [
         Some("↑↓ select"),
         show_sort.then_some("c/m sort"),

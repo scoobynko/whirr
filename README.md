@@ -75,15 +75,37 @@ network, then power, then temperature. Processes and CPU always survive.
 | `Tab` | cycle focus: processes → localhost → Claude sessions → others |
 | `↑` / `↓` | move the selection within the focused card |
 | `c` / `m` | sort processes by CPU / memory |
-| `o` | open the selected dev server in your browser (localhost card only) |
+| `o` | localhost: open the dev server in your browser · sessions: jump to the terminal it's running in |
 | `k` | kill the selected process or dev server (SIGTERM; a dialog asks first — `y` confirms, `n` or `Esc` cancels) |
 | `s` | open settings: theme, accent colour, background, fan |
 | `q` / `Ctrl-C` | quit |
 
 `k` is deliberately inert on the Claude sessions and others cards: ending a
 session mid-conversation, or killing a system agent, shouldn't be one keypress
-away. `o` lives only on the localhost card — a Claude session has no URL, and
-a system daemon's port is not something to point a browser at.
+away. `o` means "take me to this": on localhost it opens the dev server in
+your browser, and on the sessions card it brings the terminal tab that session
+is running in to the front. It's inert on processes and other listeners, which
+have nowhere to go.
+
+## Sessions and your terminal
+
+whirr finds the application hosting each Claude session by walking up its
+process tree, and then asks that application what it knows — keyed on the
+session's controlling terminal, which is the one identifier every terminal
+agrees on.
+
+| Host | `o` jumps to | Session label |
+|---|---|---|
+| [cmux](https://cmux.io) | the exact pane | the workspace title, e.g. `✳ Fix the port picker` |
+| Terminal.app, iTerm2 | the exact tab | — |
+| anything else | brings the app to the front | — |
+
+Where a host supplies its own name for a session, the card shows that instead
+of the project directory, and drops the tty — a title already tells two rows
+apart. Everywhere else nothing changes.
+
+The first jump on Terminal.app or iTerm2 will ask macOS for Automation
+permission. Denying it costs the precise-tab jump, nothing else.
 
 A process often listens on more than one port, so `o` opens straight away only
 when there's one sensible candidate; otherwise it asks which. Ports the OS

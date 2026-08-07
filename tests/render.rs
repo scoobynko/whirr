@@ -731,16 +731,35 @@ fn footer_kill_shows_only_for_killable_panels() {
 }
 
 #[test]
-fn footer_open_shows_only_for_localhost() {
-    let c = draw_app_at(&demo_with_focus(Focus::Localhost), 120, 40);
-    assert!(c.contains("o open"), "Localhost should show o open");
-    for focus in [Focus::Processes, Focus::Sessions, Focus::Others] {
+fn footer_open_shows_for_the_two_cards_that_have_somewhere_to_go() {
+    // Localhost opens a URL; Sessions jumps to the terminal the session runs
+    // in. Same verb, same key.
+    for focus in [Focus::Localhost, Focus::Sessions] {
         let c = draw_app_at(&demo_with_focus(focus), 120, 40);
-        assert!(
-            !c.contains("o open"),
-            "{focus:?} must not show o open — only a dev server has a URL"
-        );
+        assert!(c.contains("o open"), "{focus:?} should show o open");
     }
+    for focus in [Focus::Processes, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(!c.contains("o open"), "{focus:?} has nowhere to go");
+    }
+}
+
+#[test]
+fn a_session_with_a_host_title_shows_it_instead_of_the_project() {
+    // cmux names a workspace after the task the session is doing, which beats
+    // a project directory by a distance.
+    let c = draw_app_at(&App::demo(), 160, 45);
+    assert!(c.contains("Fix the port picker"), "the host's own title should be shown");
+}
+
+#[test]
+fn a_titled_session_needs_no_tty_beside_it() {
+    // The tty exists to tell identical rows apart. A title already does that,
+    // so showing both would be answering a question nobody has.
+    let c = draw_app_at(&App::demo(), 160, 45);
+    assert!(!c.contains("ttys004"), "the titled session should not also carry its tty");
+    // The two untitled, same-project rows still do.
+    assert!(c.contains("ttys020") && c.contains("ttys021"), "the collision still needs them");
 }
 
 #[test]

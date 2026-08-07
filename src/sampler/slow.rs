@@ -13,6 +13,30 @@ const TICK: Duration = Duration::from_secs(10);
 /// Walk every pid, keep the Claude processes, and read what the session card
 /// needs. `exec_path` is one cheap syscall per pid — deliberately not `args`,
 /// whose argv buffer would make a full-system walk expensive.
+/// Ask the hosting terminal what it calls each session, and attach that.
+///
+/// One `ps` and one host query per tick, and only when there are sessions to
+/// label. Hosts that cannot answer cheaply return nothing and the rows keep
+/// the project name — reading titles out of AppleScript would mean *waiting*
+/// on it, which can block for minutes.
+fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
+    let Some(first) = sessions.first() else { return };
+    let parents = crate::host::parent_map();
+    let Some(host) = crate::host::detect_with(first.pid, &parents) else { return };
+    let surfaces = crate::host::surfaces(&host);
+    if surfaces.is_empty() {
+        return;
+    }
+    for s in sessions.iter_mut() {
+        let Some(tty) = s.tty.as_deref() else { continue };
+        if let Some(m) = surfaces.iter().find(|x| x.tty == tty) {
+            if !m.title.is_empty() {
+                s.title = Some(m.title.clone());
+            }
+        }
+    }
+}
+
 fn scan_sessions() -> Vec<sessions::ClaudeSession> {
     let facts: Vec<sessions::SessionFacts> = crate::mac::proc::list_all_pids()
         .into_iter()
@@ -137,7 +161,8 @@ pub fn run(tx: Sender<Snapshot>) {
         // full pid walk that never consults lsof. Scanning them separately is
         // what keeps an lsof failure — or a machine with no listening sockets
         // at all — from blanking the sessions card.
-        let sessions = scan_sessions();
+        let mut sessions = scan_sessions();
+        attach_titles(&mut sessions);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
