@@ -6,6 +6,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.4
+
+_2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.3...v0.3.4)_
+
+
+### Fixed
+
+- *(ui)* Make the kill confirmation a dialog, not a line in another card ([d7c51bf](https://github.com/scoobynko/whirr/commit/d7c51bf0566f8ad562110fa8e914eaeaf73806a3))
+- *(ui)* Cap dialog width and cover the modal path at every size ([bc43759](https://github.com/scoobynko/whirr/commit/bc437594f57dbc4473eb803e49649629c13b3500))
 ## v0.3.3
 
 _2026-08-06 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.2...v0.3.3)_
