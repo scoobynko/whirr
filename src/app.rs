@@ -78,6 +78,11 @@ pub struct App {
     /// Always `settings.theme()` — see `apply_settings`.
     pub theme: crate::ui::theme::Theme,
     pub settings_open: bool,
+    /// Set when a setting changes; the event loop drains it and writes the
+    /// config. `App` does not touch the filesystem for the same reason it
+    /// does not spawn `open`: tests press keys by the hundred, and none of
+    /// them should rewrite the user's preferences.
+    settings_dirty: bool,
     /// Which row the settings dialog has under its cursor.
     pub settings_row: usize,
     pub sort_by: SortBy,
@@ -125,6 +130,7 @@ impl App {
             settings: Settings::default(),
             theme: Settings::default().theme(),
             settings_open: false,
+            settings_dirty: false,
             settings_row: 0,
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
@@ -154,7 +160,7 @@ impl App {
     /// Re-resolve the palette after a setting changes. Cheap — `Theme` is
     /// eleven `Copy` colours — and doing it here rather than per-colour keeps
     /// the render path reading one value.
-    fn apply_settings(&mut self) {
+    pub fn apply_settings(&mut self) {
         self.theme = self.settings.theme();
     }
 
@@ -169,6 +175,30 @@ impl App {
             _ => self.settings.fan = !self.settings.fan,
         }
         self.apply_settings();
+        self.settings_dirty = true;
+    }
+
+    /// Take the pending save, if any. The event loop calls this after every
+    /// key and writes the config file.
+    pub fn take_settings_save(&mut self) -> Option<Settings> {
+        self.settings_dirty.then(|| {
+            self.settings_dirty = false;
+            self.settings
+        })
+    }
+
+    /// Adopt the stored settings, then let the command line override them.
+    ///
+    /// Precedence is flag beats file beats default, and a flag deliberately
+    /// does *not* rewrite the file: `--no-fan` for one run should not silently
+    /// turn the fan off forever.
+    pub fn load_settings(&mut self, no_fan_flag: bool) {
+        self.settings = Settings::load();
+        if no_fan_flag {
+            self.settings.fan = false;
+        }
+        self.apply_settings();
+        self.settings_dirty = false;
     }
 
     /// A pre-populated `App` for render tests and manual UI inspection: one
@@ -563,6 +593,7 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::settings::Palette;
     use crossterm::event::{KeyCode, KeyEvent};
 
     fn key(c: char) -> KeyEvent {
@@ -680,6 +711,28 @@ mod tests {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
         assert_eq!(a.settings_row, App::SETTINGS_ROWS - 1, "must not run off the bottom");
+    }
+
+    #[test]
+    fn changing_a_setting_asks_the_event_loop_to_save_it_once() {
+        let mut a = App::demo();
+        assert_eq!(a.take_settings_save(), None, "nothing to save before anything changes");
+        press(&mut a, 's');
+        a.on_key(KeyEvent::from(KeyCode::Right));
+        let saved = a.take_settings_save().expect("a change should ask to be saved");
+        assert_eq!(saved.palette, Palette::Light, "what is saved is what was chosen");
+        assert_eq!(a.take_settings_save(), None, "and only once");
+    }
+
+    #[test]
+    fn merely_opening_and_closing_settings_saves_nothing() {
+        // Otherwise every accidental `s` rewrites the file with no change in
+        // it, and the file's mtime stops meaning anything.
+        let mut a = App::demo();
+        press(&mut a, 's');
+        a.on_key(KeyEvent::from(KeyCode::Down));
+        a.on_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(a.take_settings_save(), None);
     }
 
     #[test]

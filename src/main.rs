@@ -152,6 +152,7 @@ fn main() -> io::Result<()> {
     sampler::spawn_samplers(tx);
 
     let mut app = App::new(no_fan);
+    app.load_settings(no_fan);
     let mut last_fan = std::time::Instant::now();
 
     loop {
@@ -173,6 +174,11 @@ fn main() -> io::Result<()> {
                     // the dashboard to report.
                     if let Some(url) = app.take_open_request() {
                         let _ = std::process::Command::new("open").arg(url).spawn();
+                    }
+                    // Written here rather than in `App` so no test can
+                    // rewrite the real config just by pressing keys.
+                    if let Some(settings) = app.take_settings_save() {
+                        settings.save();
                     }
                 }
                 Event::Resize(_, _) => app.dirty = true,

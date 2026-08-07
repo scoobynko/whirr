@@ -5,7 +5,10 @@
 //! actually makes. `Settings::theme()` is the only bridge between them, which
 //! keeps the widgets ignorant of how their colours were picked.
 
+use std::path::PathBuf;
+
 use ratatui::style::Color;
+use serde::{Deserialize, Serialize};
 
 use crate::ui::theme::Theme;
 
@@ -124,7 +127,111 @@ impl Default for Settings {
     }
 }
 
+/// The on-disk shape, kept separate from `Settings` so the file format can
+/// stay stable while the in-memory type moves.
+///
+/// Every field is `Option<String>` rather than a typed enum: serde would
+/// reject the *whole file* over one unrecognised value, so a typo in the
+/// accent would silently discard a deliberate theme choice. Parsing each
+/// field by hand keeps a bad value costing only itself.
+#[derive(Serialize, Deserialize, Default)]
+struct ConfigFile {
+    #[serde(default)]
+    appearance: Appearance,
+    #[serde(default)]
+    behaviour: Behaviour,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct Appearance {
+    theme: Option<String>,
+    accent: Option<String>,
+    background: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct Behaviour {
+    fan: Option<bool>,
+}
+
+impl Palette {
+    fn from_label(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|p| p.label() == s)
+    }
+}
+
+impl Accent {
+    fn from_label(s: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|a| a.label() == s)
+    }
+}
+
 impl Settings {
+    /// Where the choices are remembered between runs.
+    pub fn config_path() -> Option<PathBuf> {
+        let base = std::env::var_os("XDG_CONFIG_HOME")
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
+        Some(base.join("whirr").join("config.toml"))
+    }
+
+    /// Read the config, or fall back to defaults.
+    ///
+    /// Never fails: a dashboard that refuses to start over a stray character
+    /// in a preferences file would be worse than one that ignores it.
+    pub fn load() -> Self {
+        Self::config_path()
+            .and_then(|p| std::fs::read_to_string(p).ok())
+            .map(|t| Self::from_toml(&t))
+            .unwrap_or_default()
+    }
+
+    /// Write the current choices. Errors are dropped — failing to persist a
+    /// preference is not worth interrupting the dashboard for.
+    pub fn save(&self) {
+        let Some(path) = Self::config_path() else { return };
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = std::fs::write(path, self.to_toml());
+    }
+
+    /// Apply whatever the file got right, on top of the defaults.
+    pub fn from_toml(text: &str) -> Self {
+        let file: ConfigFile = toml::from_str(text).unwrap_or_default();
+        let mut s = Self::default();
+        if let Some(p) = file.appearance.theme.as_deref().and_then(Palette::from_label) {
+            s.palette = p;
+        }
+        if let Some(a) = file.appearance.accent.as_deref().and_then(Accent::from_label) {
+            s.accent = a;
+        }
+        match file.appearance.background.as_deref() {
+            Some("terminal") => s.terminal_bg = true,
+            Some("painted") => s.terminal_bg = false,
+            _ => {}
+        }
+        if let Some(fan) = file.behaviour.fan {
+            s.fan = fan;
+        }
+        s
+    }
+
+    pub fn to_toml(&self) -> String {
+        let file = ConfigFile {
+            appearance: Appearance {
+                theme: Some(self.palette.label().to_string()),
+                accent: Some(self.accent.label().to_string()),
+                background: Some(
+                    if self.terminal_bg { "terminal" } else { "painted" }.to_string(),
+                ),
+            },
+            behaviour: Behaviour { fan: Some(self.fan) },
+        };
+        // The only way this fails is a bug in this function, not in user input.
+        toml::to_string_pretty(&file).unwrap_or_default()
+    }
+
     /// Resolve the choices into the eleven colours the widgets draw with.
     pub fn theme(&self) -> Theme {
         let base = match self.palette {
@@ -234,6 +341,64 @@ mod tests {
         let d = Settings::default();
         assert_eq!(d.theme(), crate::ui::theme::Theme::dark(), "defaults must not change the look");
         assert!(d.fan, "the fan is on unless asked otherwise");
+    }
+
+    #[test]
+    fn a_written_config_reads_back_as_the_same_settings() {
+        let s = Settings {
+            palette: Palette::Light,
+            accent: Accent::Violet,
+            terminal_bg: true,
+            fan: false,
+        };
+        assert_eq!(Settings::from_toml(&s.to_toml()), s);
+    }
+
+    #[test]
+    fn the_file_reads_the_way_a_person_would_write_it() {
+        let text = Settings::default().to_toml();
+        assert!(text.contains("[appearance]"), "{text}");
+        assert!(text.contains("theme = \"dark\""), "{text}");
+        assert!(text.contains("background = \"painted\""), "{text}");
+        assert!(text.contains("[behaviour]"), "{text}");
+    }
+
+    #[test]
+    fn a_partial_config_keeps_the_defaults_for_everything_it_omits() {
+        // A file written by an older whirr must not reset the settings it
+        // never knew about.
+        let s = Settings::from_toml("[appearance]\ntheme = \"light\"\n");
+        assert_eq!(s.palette, Palette::Light);
+        assert_eq!(s.accent, Settings::default().accent, "omitted keys keep their default");
+        assert_eq!(s.fan, Settings::default().fan);
+    }
+
+    #[test]
+    fn one_bad_value_costs_only_that_setting() {
+        // Per-field tolerance rather than all-or-nothing: a typo in the accent
+        // must not silently throw away a deliberate theme choice.
+        let s = Settings::from_toml(
+            "[appearance]\ntheme = \"light\"\naccent = \"chartreuse\"\n",
+        );
+        assert_eq!(s.palette, Palette::Light, "the valid setting survives");
+        assert_eq!(s.accent, Settings::default().accent, "the invalid one falls back");
+    }
+
+    #[test]
+    fn an_unreadable_config_is_ignored_rather_than_fatal() {
+        // A dashboard that refuses to start because of a stray character in a
+        // preferences file would be worse than one that ignores it.
+        for junk in ["", "not toml at all {{{", "[appearance", "theme = "] {
+            assert_eq!(Settings::from_toml(junk), Settings::default(), "{junk:?}");
+        }
+    }
+
+    #[test]
+    fn unknown_keys_from_a_newer_whirr_are_ignored() {
+        let s = Settings::from_toml(
+            "[appearance]\ntheme = \"light\"\nsparkles = true\n\n[future]\nx = 1\n",
+        );
+        assert_eq!(s.palette, Palette::Light);
     }
 
     #[test]

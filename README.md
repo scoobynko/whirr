@@ -126,8 +126,25 @@ That last one matters if your terminal is themed or translucent — whirr paints
 edge to edge by default, which overrides it. Set **background** to `terminal`
 and the frame is left alone.
 
-Changes apply as you make them. They currently last for the session; they are
-not yet written to disk.
+Changes apply as you make them and are remembered in
+`~/.config/whirr/config.toml` (or `$XDG_CONFIG_HOME/whirr/`):
+
+```toml
+[appearance]
+theme = "dark"        # dark | light
+accent = "teal"       # teal | blue | violet | amber | green
+background = "painted" # painted | terminal
+
+[behaviour]
+fan = true
+```
+
+The file is optional and edits to it are picked up on the next launch. A value
+whirr doesn't recognise is ignored and that one setting falls back to its
+default — a typo in the accent won't discard your theme — and an unparseable
+file is ignored entirely rather than being an error worth refusing to start
+over. Flags win over the file, so `--no-fan` applies for that run without
+rewriting your preference.
 
 ## Performance budget
 
