@@ -94,6 +94,43 @@ fn frame_background_is_base_at_sampled_positions() {
 }
 
 #[test]
+fn nothing_is_drawn_hard_against_the_left_or_right_edge() {
+    // The frame used to start at column 0: the wordmark, every card border
+    // and the footer all sat flush against the terminal edge.
+    for (w, h) in [(200, 50), (160, 45), (120, 40), (103, 45), (80, 24)] {
+        for line in draw_grid(w, h) {
+            if line.trim().is_empty() {
+                continue;
+            }
+            assert!(line.starts_with(' '), "{w}x{h}: drawn at column 0: {line:?}");
+            assert!(line.ends_with(' '), "{w}x{h}: drawn at the last column: {line:?}");
+        }
+    }
+}
+
+#[test]
+fn a_narrow_terminal_keeps_its_columns_instead_of_the_gutter() {
+    // Below 40 columns two columns of content matter more than the breathing
+    // room, so the gutter is dropped rather than shrinking the cards further.
+    let g = draw_grid(36, 20);
+    assert!(
+        g.iter().any(|l| !l.trim().is_empty() && !l.starts_with(' ')),
+        "a narrow frame should use its full width"
+    );
+}
+
+#[test]
+fn the_gutter_does_not_change_which_layout_a_size_gets() {
+    // The tier thresholds describe how wide a *terminal* must be. Taking the
+    // gutter before resolving them would have raised every threshold by two
+    // and cost a 120-column terminal its three-card body.
+    let c = draw_at(120, 40);
+    for title in ["localhost", "claude", "others"] {
+        assert!(c.contains(title), "120x40 must still get three cards, {title:?} missing");
+    }
+}
+
+#[test]
 fn renders_at_all_sizes_without_panic() {
     for (w, h) in [(200, 50), (120, 40), (80, 24), (60, 15), (20, 5)] {
         let content = draw_at(w, h);
@@ -158,7 +195,10 @@ fn stock_80x24_fits_without_starving_header_or_ports() {
     // existed, ports' floor happened to land exactly on the terminal's last
     // row; now it ends one row short of that to make room for the footer.
     assert_eq!(lines.len() - 2, ports_row + 3, "ports card should occupy exactly its Min(4) floor, one row above the global footer");
-    assert!(lines[23].starts_with('↑'), "last row should be the global footer");
+    assert!(
+        lines[23].trim_start().starts_with('↑'),
+        "last row should be the global footer"
+    );
 }
 
 // At >=120 columns, `three_cards` is always active (it only checks width),
@@ -203,7 +243,9 @@ fn ports_card_sits_under_processes_not_full_width() {
         .iter()
         .position(|l| l.contains("Ports"))
         .expect("ports title row present");
-    let last_char = lines[ports_row].chars().last().unwrap();
+    // `trim_end` for the frame gutter: the last *drawn* character is what
+    // this is about, not the blank column beside it.
+    let last_char = lines[ports_row].trim_end().chars().last().unwrap();
     assert_eq!(
         last_char, '│',
         "ports title row should end inside the network panel's right border, \
