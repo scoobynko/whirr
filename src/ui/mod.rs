@@ -45,7 +45,15 @@ pub fn draw(f: &mut Frame, app: &App) {
         f.render_widget(Block::default().style(Style::default().bg(app.theme.base)), area);
     }
 
+    // Resolved from the true terminal size, then laid out inside a gutter.
+    // Doing it in that order matters: the thresholds in `Screen` describe how
+    // wide a *terminal* must be for a feature to earn its place, and taking
+    // the gutter first would have silently raised every one of them by two —
+    // a 120-column terminal would have lost its three-card body to a
+    // cosmetic change. The gutter comes out of the cards instead, which costs
+    // each of them a column and nothing else.
     let screen = Screen::resolve(area);
+    let area = inset(area);
     let split = Layout::vertical([Constraint::Min(0), Constraint::Length(1)]).split(area);
     render_footer(f, split[1], app);
 
@@ -170,6 +178,29 @@ fn render_kill_dialog(f: &mut Frame, area: Rect, theme: &theme::Theme, pid: i32,
         ]),
     ];
     modal::render(f, area, theme, "confirm kill", lines, theme.red);
+}
+
+/// One column of gutter either side of everything.
+///
+/// Horizontal only. A row costs far more than a column here: the body is
+/// already floor-bound at 80x24, where taking a row would push the ports card
+/// below its minimum. Columns are the cheap axis, and the flush-left edge is
+/// what actually reads as cramped.
+///
+/// Dropped entirely on a terminal too narrow to spare it, where two columns
+/// of content matter more than the breathing room.
+fn inset(area: Rect) -> Rect {
+    const GUTTER: u16 = 1;
+    /// Below this the gutter costs more than it gives.
+    const MIN_WIDTH: u16 = 40;
+    if area.width < MIN_WIDTH {
+        return area;
+    }
+    Rect {
+        x: area.x + GUTTER,
+        width: area.width.saturating_sub(GUTTER * 2),
+        ..area
+    }
 }
 
 /// The gauge band. `Tier::Grid` stacks the four cards 2x2 — `Screen` only
