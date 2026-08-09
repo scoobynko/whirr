@@ -6,6 +6,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.9
+
+_2026-08-09 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.8...v0.3.9)_
+
+
+### Fixed
+
+- *(ui)* Give the frame a gutter instead of sitting on the edge ([c495667](https://github.com/scoobynko/whirr/commit/c495667ea8f8b8a87ba50a3767987ce0d6a9d88f))
 ## v0.3.8
 
 _2026-08-07 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.7...v0.3.8)_
