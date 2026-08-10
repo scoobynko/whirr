@@ -1,0 +1,59 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 100"
+     width="210" height="100" role="img" aria-label="whirr">
+  <title>whirr</title>
+  <g fill="#2de1c2">
+    <rect x="0" y="0" width="10" height="20"/>
+    <rect x="40" y="0" width="10" height="20"/>
+    <rect x="60" y="0" width="10" height="20"/>
+    <rect x="80" y="0" width="10" height="20"/>
+    <rect x="100" y="0" width="10" height="20"/>
+    <rect x="110" y="0" width="10" height="20"/>
+    <rect x="120" y="0" width="10" height="20"/>
+    <rect x="140" y="0" width="10" height="20"/>
+    <rect x="150" y="0" width="10" height="20"/>
+    <rect x="180" y="0" width="10" height="20"/>
+    <rect x="190" y="0" width="10" height="20"/>
+    <rect x="0" y="20" width="10" height="20"/>
+    <rect x="40" y="20" width="10" height="20"/>
+    <rect x="60" y="20" width="10" height="20"/>
+    <rect x="80" y="20" width="10" height="20"/>
+    <rect x="110" y="20" width="10" height="20"/>
+    <rect x="140" y="20" width="10" height="20"/>
+    <rect x="160" y="20" width="10" height="20"/>
+    <rect x="180" y="20" width="10" height="20"/>
+    <rect x="200" y="20" width="10" height="20"/>
+    <rect x="0" y="40" width="10" height="20"/>
+    <rect x="20" y="40" width="10" height="20"/>
+    <rect x="40" y="40" width="10" height="20"/>
+    <rect x="60" y="40" width="10" height="20"/>
+    <rect x="70" y="40" width="10" height="20"/>
+    <rect x="80" y="40" width="10" height="20"/>
+    <rect x="110" y="40" width="10" height="20"/>
+    <rect x="140" y="40" width="10" height="20"/>
+    <rect x="150" y="40" width="10" height="20"/>
+    <rect x="180" y="40" width="10" height="20"/>
+    <rect x="190" y="40" width="10" height="20"/>
+    <rect x="0" y="60" width="10" height="20"/>
+    <rect x="10" y="60" width="10" height="20"/>
+    <rect x="30" y="60" width="10" height="20"/>
+    <rect x="40" y="60" width="10" height="20"/>
+    <rect x="60" y="60" width="10" height="20"/>
+    <rect x="80" y="60" width="10" height="20"/>
+    <rect x="110" y="60" width="10" height="20"/>
+    <rect x="140" y="60" width="10" height="20"/>
+    <rect x="160" y="60" width="10" height="20"/>
+    <rect x="180" y="60" width="10" height="20"/>
+    <rect x="200" y="60" width="10" height="20"/>
+    <rect x="0" y="80" width="10" height="20"/>
+    <rect x="40" y="80" width="10" height="20"/>
+    <rect x="60" y="80" width="10" height="20"/>
+    <rect x="80" y="80" width="10" height="20"/>
+    <rect x="100" y="80" width="10" height="20"/>
+    <rect x="110" y="80" width="10" height="20"/>
+    <rect x="120" y="80" width="10" height="20"/>
+    <rect x="140" y="80" width="10" height="20"/>
+    <rect x="160" y="80" width="10" height="20"/>
+    <rect x="180" y="80" width="10" height="20"/>
+    <rect x="200" y="80" width="10" height="20"/>
+  </g>
+</svg>

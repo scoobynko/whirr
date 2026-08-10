@@ -1,0 +1,106 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-108 -108 216 216"
+     width="216" height="216" role="img" aria-label="whirr">
+  <title>whirr</title>
+  <!-- Geometry from src/ui/burst.rs: 10 rays at 36 degrees offset by 18, hub
+       empty inside 0.26, inner ring 0.26-0.58 and outer 0.68-1.0 turning
+       opposite ways with a dead band between them.
+
+       The outer ring is parked half a ray-step round. The two rings almost
+       never line up in the app, and drawing both at zero collapses the mark
+       into ten continuous spokes instead of twenty offset segments. -->
+  <style>
+    .ring { transform-origin: 0 0; }
+    .inner { animation: whirr-spin 9s linear infinite; }
+    .outer { animation: whirr-spin 9s linear infinite reverse; }
+    @keyframes whirr-spin { to { transform: rotate(360deg); } }
+    @media (prefers-reduced-motion: reduce) { .inner, .outer { animation: none; } }
+  </style>
+  <g fill="#2de1c2">
+    <g class="ring inner">
+        <circle cx="24.73" cy="8.03" r="3.57"/>
+        <circle cx="34.87" cy="11.33" r="3.57"/>
+        <circle cx="45.02" cy="14.63" r="3.57"/>
+        <circle cx="55.16" cy="17.92" r="3.57"/>
+        <circle cx="15.28" cy="21.03" r="3.57"/>
+        <circle cx="21.55" cy="29.66" r="3.57"/>
+        <circle cx="27.82" cy="38.29" r="3.57"/>
+        <circle cx="34.09" cy="46.92" r="3.57"/>
+        <circle cx="0.00" cy="26.00" r="3.57"/>
+        <circle cx="0.00" cy="36.67" r="3.57"/>
+        <circle cx="0.00" cy="47.33" r="3.57"/>
+        <circle cx="0.00" cy="58.00" r="3.57"/>
+        <circle cx="-15.28" cy="21.03" r="3.57"/>
+        <circle cx="-21.55" cy="29.66" r="3.57"/>
+        <circle cx="-27.82" cy="38.29" r="3.57"/>
+        <circle cx="-34.09" cy="46.92" r="3.57"/>
+        <circle cx="-24.73" cy="8.03" r="3.57"/>
+        <circle cx="-34.87" cy="11.33" r="3.57"/>
+        <circle cx="-45.02" cy="14.63" r="3.57"/>
+        <circle cx="-55.16" cy="17.92" r="3.57"/>
+        <circle cx="-24.73" cy="-8.03" r="3.57"/>
+        <circle cx="-34.87" cy="-11.33" r="3.57"/>
+        <circle cx="-45.02" cy="-14.63" r="3.57"/>
+        <circle cx="-55.16" cy="-17.92" r="3.57"/>
+        <circle cx="-15.28" cy="-21.03" r="3.57"/>
+        <circle cx="-21.55" cy="-29.66" r="3.57"/>
+        <circle cx="-27.82" cy="-38.29" r="3.57"/>
+        <circle cx="-34.09" cy="-46.92" r="3.57"/>
+        <circle cx="-0.00" cy="-26.00" r="3.57"/>
+        <circle cx="-0.00" cy="-36.67" r="3.57"/>
+        <circle cx="-0.00" cy="-47.33" r="3.57"/>
+        <circle cx="-0.00" cy="-58.00" r="3.57"/>
+        <circle cx="15.28" cy="-21.03" r="3.57"/>
+        <circle cx="21.55" cy="-29.66" r="3.57"/>
+        <circle cx="27.82" cy="-38.29" r="3.57"/>
+        <circle cx="34.09" cy="-46.92" r="3.57"/>
+        <circle cx="24.73" cy="-8.03" r="3.57"/>
+        <circle cx="34.87" cy="-11.33" r="3.57"/>
+        <circle cx="45.02" cy="-14.63" r="3.57"/>
+        <circle cx="55.16" cy="-17.92" r="3.57"/>
+    </g>
+    <g transform="rotate(18.0)">
+      <g class="ring outer">
+        <circle cx="64.67" cy="21.01" r="3.57"/>
+        <circle cx="74.82" cy="24.31" r="3.57"/>
+        <circle cx="84.96" cy="27.61" r="3.57"/>
+        <circle cx="95.11" cy="30.90" r="3.57"/>
+        <circle cx="39.97" cy="55.01" r="3.57"/>
+        <circle cx="46.24" cy="63.64" r="3.57"/>
+        <circle cx="52.51" cy="72.27" r="3.57"/>
+        <circle cx="58.78" cy="80.90" r="3.57"/>
+        <circle cx="0.00" cy="68.00" r="3.57"/>
+        <circle cx="0.00" cy="78.67" r="3.57"/>
+        <circle cx="0.00" cy="89.33" r="3.57"/>
+        <circle cx="0.00" cy="100.00" r="3.57"/>
+        <circle cx="-39.97" cy="55.01" r="3.57"/>
+        <circle cx="-46.24" cy="63.64" r="3.57"/>
+        <circle cx="-52.51" cy="72.27" r="3.57"/>
+        <circle cx="-58.78" cy="80.90" r="3.57"/>
+        <circle cx="-64.67" cy="21.01" r="3.57"/>
+        <circle cx="-74.82" cy="24.31" r="3.57"/>
+        <circle cx="-84.96" cy="27.61" r="3.57"/>
+        <circle cx="-95.11" cy="30.90" r="3.57"/>
+        <circle cx="-64.67" cy="-21.01" r="3.57"/>
+        <circle cx="-74.82" cy="-24.31" r="3.57"/>
+        <circle cx="-84.96" cy="-27.61" r="3.57"/>
+        <circle cx="-95.11" cy="-30.90" r="3.57"/>
+        <circle cx="-39.97" cy="-55.01" r="3.57"/>
+        <circle cx="-46.24" cy="-63.64" r="3.57"/>
+        <circle cx="-52.51" cy="-72.27" r="3.57"/>
+        <circle cx="-58.78" cy="-80.90" r="3.57"/>
+        <circle cx="-0.00" cy="-68.00" r="3.57"/>
+        <circle cx="-0.00" cy="-78.67" r="3.57"/>
+        <circle cx="-0.00" cy="-89.33" r="3.57"/>
+        <circle cx="-0.00" cy="-100.00" r="3.57"/>
+        <circle cx="39.97" cy="-55.01" r="3.57"/>
+        <circle cx="46.24" cy="-63.64" r="3.57"/>
+        <circle cx="52.51" cy="-72.27" r="3.57"/>
+        <circle cx="58.78" cy="-80.90" r="3.57"/>
+        <circle cx="64.67" cy="-21.01" r="3.57"/>
+        <circle cx="74.82" cy="-24.31" r="3.57"/>
+        <circle cx="84.96" cy="-27.61" r="3.57"/>
+        <circle cx="95.11" cy="-30.90" r="3.57"/>
+      </g>
+    </g>
+  </g>
+</svg>
