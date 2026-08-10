@@ -21,7 +21,7 @@ My opinion on Claude Code is well known.
 brew install scoobynko/whirr/whirr
 ```
 
-No Homebrew:
+No Homebrew, or too lazy to update Xcode (Homebrew insists, this doesn't):
 
 ```bash
 curl --proto '=https' --tlsv1.2 -LsSf https://github.com/scoobynko/whirr/releases/latest/download/whirr-installer.sh | sh
