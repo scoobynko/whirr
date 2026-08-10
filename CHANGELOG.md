@@ -6,6 +6,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.10
+
+_2026-08-10 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.9...v0.3.10)_
+
+
+### Added
+
+- *(assets)* Animated SVG of the burst fan ([71b5099](https://github.com/scoobynko/whirr/commit/71b5099b902e88dc8c11b58ee3e5fd899d6ecf1c))
+- *(assets)* Animated GIF of the header, for GitHub ([d6b0686](https://github.com/scoobynko/whirr/commit/d6b0686d06c3b5dc3f9f97f8b859916113069a62))
+
+### Documentation
+
+- Rewrite the README in fewer words ([701be60](https://github.com/scoobynko/whirr/commit/701be60ef7bcf8fd53cff6d3c26279e0d8fd74f1))
+- Put the Claude Code aside back in the why ([3f57a7b](https://github.com/scoobynko/whirr/commit/3f57a7b48171a86d472b2b7c9fdfb6fbcb751d71))
+- Point the Xcode-shy at the installer script ([5558d2b](https://github.com/scoobynko/whirr/commit/5558d2b60856817549ed0cc940810f09d4f27d09))
+- Blunter line for the installer script ([9c82fed](https://github.com/scoobynko/whirr/commit/9c82fede5e09a58fe725a0905c6ce8dec29e8d59))
+- Shorten CONTRIBUTING, move release notes out of it ([471e652](https://github.com/scoobynko/whirr/commit/471e6522ef5644fc0d2e5d45370ebdcb259c6591))
+- Put the wordmark at the top of the README ([4bf66ef](https://github.com/scoobynko/whirr/commit/4bf66eff53896b5154318a2861e21ffd5521e07d))
+- New demo video ([583fbe5](https://github.com/scoobynko/whirr/commit/583fbe549396919f77baa33667bc47af593e9116))
+- Fix the video link text ([db91278](https://github.com/scoobynko/whirr/commit/db9127895128a157991020c018b9d9180aa56e0c))
 ## v0.3.9
 
 _2026-08-09 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.8...v0.3.9)_
