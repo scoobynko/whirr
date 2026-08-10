@@ -2,7 +2,7 @@
 
 macOS system dashboard for your terminal. No sudo, no mouse.
 
-https://github.com/user-attachments/assets/0cd0abed-fcae-4c5e-893d-05d02d69a0e7
+[Watch it works](https://github.com/user-attachments/assets/c3844884-5440-4cba-9b32-f073f100a815)
 
 ## Why
 
