@@ -11,7 +11,7 @@ keywords = ["macos", "tui", "system-monitor", "dashboard", "terminal"]
 categories = ["command-line-utilities", "os::macos-apis"]
 # Design and plan documents live beside the code but must not ship inside the
 # published crate — they are ~2.9k lines and of no use to a consumer.
-exclude = ["docs/", ".superpowers/", ".claude/", ".github/"]
+exclude = ["docs/", "assets/", ".superpowers/", ".claude/", ".github/"]
 
 [dependencies]
 ratatui = "0.29"
