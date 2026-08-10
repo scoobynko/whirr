@@ -1,4 +1,4 @@
-<img src="assets/whirr-lockup.svg" width="330" alt="whirr">
+<img src="assets/whirr-lockup.gif" width="380" alt="whirr">
 
 macOS system dashboard for your terminal. No sudo, no mouse.
 
