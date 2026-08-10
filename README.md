@@ -13,6 +13,7 @@ So I wanted this in the same window. Not another app to alt-tab to.
 Then I added what I keep losing track of. Localhost servers, because I run a
 few projects at once and always forget one. Claude sessions, because I run
 several agents in parallel and I want to know which one is cooking the machine.
+My opinion on Claude Code is well known.
 
 ## Install
 
