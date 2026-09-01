@@ -13,6 +13,7 @@ use std::path::PathBuf;
 use super::claude_state::{ActivityFacts, SessionRecord};
 
 /// What `slow.rs` reads per candidate pid.
+#[derive(Clone)]
 pub struct SessionFacts {
     pub pid: i32,
     pub exec_path: Option<PathBuf>,
@@ -64,6 +65,17 @@ pub fn build_sessions(facts: &[SessionFacts]) -> Vec<ClaudeSession> {
                 .as_deref()
                 .and_then(|p| p.to_str())
                 .is_some_and(super::ports::is_claude)
+                // A controlling terminal is what makes it a session rather
+                // than a helper. Claude Code runs several processes from the
+                // same binary — `claude daemon run`, a `--bg-pty-host` out of
+                // the app bundle — and they were appearing as rows named after
+                // whatever directory they happened to start in, which nothing
+                // could open and which came and went on their own.
+                //
+                // The cost is that a genuinely headless run is not listed. It
+                // has no terminal to jump to, which is the card's one action,
+                // so that is the right side to err on.
+                && f.tty.is_some()
         })
         .map(|f| ClaudeSession {
             pid: f.pid,
@@ -150,6 +162,23 @@ mod tests {
     }
 
     #[test]
+    fn a_claude_process_with_no_terminal_is_a_helper_not_a_session() {
+        // `claude daemon run` and the `--bg-pty-host` out of the app bundle
+        // are the same binary and were being listed as sessions, named after
+        // whatever directory they started in.
+        let helpers = [
+            f(30, CLAUDE, Some("/Users/me"), None),
+            f(31, "/Users/me/.local/share/claude/ClaudeCode.app/Contents/MacOS/claude", Some("/Users/me/p/app"), None),
+        ];
+        assert!(build_sessions(&helpers).is_empty(), "no terminal, no session");
+        // And the real one beside them still comes through.
+        let mixed = [helpers[0].clone(), f(32, CLAUDE, Some("/Users/me/p/app"), Some("ttys010"))];
+        let s = build_sessions(&mixed);
+        assert_eq!(s.len(), 1);
+        assert_eq!(s[0].pid, 32);
+    }
+
+    #[test]
     fn a_session_with_no_readable_cwd_is_still_listed() {
         let s = build_sessions(&[f(4, CLAUDE, None, Some("ttys004"))]);
         assert_eq!(s.len(), 1, "an unreadable cwd must not drop the session");
@@ -161,8 +190,8 @@ mod tests {
         // Two sessions indistinguishable by project and tty must still come back
         // in a stable order, so the card does not reshuffle between ticks.
         let facts = [
-            f(20, CLAUDE, Some("/Users/me/p/x"), None),
-            f(10, CLAUDE, Some("/Users/me/p/x"), None),
+            f(20, CLAUDE, Some("/Users/me/p/x"), Some("ttys001")),
+            f(10, CLAUDE, Some("/Users/me/p/x"), Some("ttys001")),
         ];
         for _ in 0..5 {
             let pids: Vec<i32> = build_sessions(&facts).iter().map(|s| s.pid).collect();
