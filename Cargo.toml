@@ -1,6 +1,6 @@
 [package]
 name = "whirr"
-version = "0.3.11"
+version = "0.3.12"
 edition = "2021"
 description = "A whirring macOS system dashboard for your terminal"
 license = "MIT"
