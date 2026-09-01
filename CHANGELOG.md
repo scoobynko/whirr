@@ -6,6 +6,16 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.12
+
+_2026-09-01 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.11...v0.3.12)_
+
+
+### Fixed
+
+- Only list claude processes that are sessions ([89236f5](https://github.com/scoobynko/whirr/commit/89236f58e91c7c1957d7f9c23b237ac9ca0fba7d))
+- A cron deleted from any session retires everywhere ([0abd06a](https://github.com/scoobynko/whirr/commit/0abd06ae570c9078779e815c8c16ab3365bcce15))
+- Find a session whose binary the updater deleted ([524c44d](https://github.com/scoobynko/whirr/commit/524c44dfc6feec5ab0b76d1d99d381d03bd8b25b))
 ## v0.3.11
 
 _2026-09-01 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.10...v0.3.11)_
