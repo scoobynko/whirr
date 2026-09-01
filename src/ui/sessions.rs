@@ -325,6 +325,36 @@ mod tests {
     }
 
     #[test]
+    fn a_real_armed_wakeup_reaches_the_card_as_a_countdown() {
+        // End to end, from the record Claude Code actually writes to the word
+        // on the row. The parser and the label were each tested alone; this is
+        // the join, and it is what says `loop` is a state a session can really
+        // be in rather than one the enum merely allows.
+        let logged = std::time::UNIX_EPOCH + Duration::from_secs(1_788_166_468);
+        let line = r#"{"type":"assistant","timestamp":"2026-08-31T08:54:28.333Z","message":{"content":[{"type":"tool_use","name":"ScheduleWakeup","input":{"delaySeconds":1200,"reason":"waiting on the verification agent","noop":true}}]}}"#;
+        let wake_at = crate::sampler::claude_state::armed_wake_at(line, logged)
+            .expect("a real ScheduleWakeup record must be recognised");
+
+        // Five minutes after it was logged: fifteen still to wait.
+        let now = logged + Duration::from_secs(300);
+        let facts = crate::sampler::claude_state::ActivityFacts {
+            status: Some(crate::sampler::claude_state::Status::Idle),
+            wake_at: Some(wake_at),
+            ..Default::default()
+        };
+        let st = crate::sampler::claude_state::state(&facts, now);
+        assert_eq!(label(&st), "loop 15m");
+        assert!(st.warn, "a session that will restart itself is worth seeing");
+
+        // And once it has fired, the row stops claiming a countdown.
+        let after = wake_at + Duration::from_secs(1);
+        assert!(!matches!(
+            crate::sampler::claude_state::state(&facts, after).activity,
+            Activity::Loop { .. }
+        ));
+    }
+
+    #[test]
     fn a_scheduled_session_says_so_instead_of_saying_idle() {
         // A cron or a `/schedule` wakes the session and spends tokens with
         // nobody watching. Nothing on disk says when the next one lands, so
