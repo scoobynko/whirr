@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::mpsc::Sender;
@@ -181,10 +181,32 @@ fn pending_wake(transcript: &Path) -> Option<SystemTime> {
 struct Arranged {
     /// How far into the transcript this has read.
     offset: u64,
-    /// Live crons, by id, each with the schedule in Claude Code's words.
+    /// Crons made here, by id, each with the schedule in Claude Code's words.
+    /// Whether they are still live is not a question this can answer alone.
     crons: BTreeMap<String, String>,
     /// When a scheduled task last woke the session.
     last_fire: Option<SystemTime>,
+}
+
+/// Every session's ledger, plus the deletions that apply across all of them.
+///
+/// Crons are the user's, not the session's: they live on the server, and any
+/// session can delete one that another made. Keeping deletions per session
+/// meant a cron deleted from a second window stayed on the first one's row
+/// forever, which is exactly what happened — made in one session, deleted from
+/// another in the same project, and the card went on saying `scheduled`.
+#[derive(Default)]
+struct Ledger {
+    by_session: HashMap<String, Arranged>,
+    /// Ids deleted anywhere. Grows only; a cron id is never reused.
+    deleted: HashSet<String>,
+}
+
+impl Ledger {
+    /// The crons a session made that nobody has since deleted.
+    fn live(&self, session: &str) -> Vec<String> {
+        self.by_session.get(session).into_iter().flat_map(|a| &a.crons).filter(|(id, _)| !self.deleted.contains(*id)).map(|(_, schedule)| schedule.clone()).collect()
+    }
 }
 
 /// Fold whatever has been appended to `path` into `at`.
@@ -192,21 +214,21 @@ struct Arranged {
 /// Reads a line at a time and keeps only the few that could carry a record, so
 /// a first pass over a 26 MB transcript costs one sequential read and a
 /// kilobyte of memory rather than a 26 MB allocation.
-fn read_arranged(path: &Path, at: &mut Arranged) {
+fn read_arranged(path: &Path, at: &mut Arranged) -> Vec<String> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    let Ok(file) = std::fs::File::open(path) else { return };
-    let Ok(len) = file.metadata().map(|m| m.len()) else { return };
+    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return Vec::new() };
     // Shorter than last time means a different file under the same name.
     // Reading on from the old offset would land mid-record.
     if len < at.offset {
         *at = Arranged::default();
     }
     if len == at.offset {
-        return;
+        return Vec::new();
     }
     let mut reader = BufReader::new(file);
     if reader.seek(SeekFrom::Start(at.offset)).is_err() {
-        return;
+        return Vec::new();
     }
     let (mut wanted, mut line) = (String::new(), String::new());
     loop {
@@ -231,13 +253,9 @@ fn read_arranged(path: &Path, at: &mut Arranged) {
         }
     }
     let found = claude_state::scan_unattended(&wanted);
-    // Ids are unique per creation, so applying the creations and the deletions
-    // of one slice in either order gives the same answer.
     at.crons.extend(found.created);
-    for id in found.deleted {
-        at.crons.remove(&id);
-    }
     at.last_fire = found.last_fire.or(at.last_fire);
+    found.deleted
 }
 
 /// Attach what each session is doing: busy, looping, running a background
@@ -249,7 +267,7 @@ fn read_arranged(path: &Path, at: &mut Arranged) {
 fn attach_state(
     sessions: &mut [sessions::ClaudeSession],
     parents: &HashMap<i32, i32>,
-    arranged: &mut HashMap<String, Arranged>,
+    ledger: &mut Ledger,
 ) {
     if sessions.is_empty() {
         return;
@@ -305,12 +323,20 @@ fn attach_state(
             }
             // Unlike the wakeup, this runs whether or not the session is
             // working: a cron outlives the turn that made it.
-            let at = arranged.entry(rec.session_id.clone()).or_default();
-            read_arranged(&transcript, at);
-            s.facts.crons = at.crons.values().cloned().collect();
+            let at = ledger.by_session.entry(rec.session_id.clone()).or_default();
+            let deleted = read_arranged(&transcript, at);
             s.facts.last_scheduled_fire = at.last_fire;
+            ledger.deleted.extend(deleted);
         }
         s.record = Some(rec.clone());
+    }
+    // Only now, with every session read, is it known which crons are still
+    // live: a deletion read from one session's transcript retires a cron the
+    // row for another session is about to claim.
+    for s in sessions.iter_mut() {
+        if let Some(rec) = &s.record {
+            s.facts.crons = ledger.live(&rec.session_id);
+        }
     }
 }
 
@@ -435,7 +461,7 @@ pub fn run(tx: Sender<Snapshot>) {
     let mut last_good: Vec<PortRow> = Vec::new();
     // What each session has arranged to run without anyone watching, by
     // session id. See `Arranged` for why this is kept rather than re-read.
-    let mut arranged: HashMap<String, Arranged> = HashMap::new();
+    let mut ledger = Ledger::default();
     loop {
         // Ports and sessions are independent sources: sessions come from a
         // full pid walk that never consults lsof. Scanning them separately is
@@ -446,7 +472,7 @@ pub fn run(tx: Sender<Snapshot>) {
         // the terminal, the state lookup walks them down to the shells.
         let parents = crate::host::parent_map();
         attach_titles(&mut sessions, &parents);
-        attach_state(&mut sessions, &parents, &mut arranged);
+        attach_state(&mut sessions, &parents, &mut ledger);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
@@ -458,6 +484,59 @@ pub fn run(tx: Sender<Snapshot>) {
             return;
         }
         std::thread::sleep(TICK);
+    }
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::Ledger;
+
+    /// One session's ledger, as `read_arranged` would leave it.
+    fn made(ledger: &mut Ledger, session: &str, crons: &[(&str, &str)]) {
+        let at = ledger.by_session.entry(session.to_string()).or_default();
+        for (id, schedule) in crons {
+            at.crons.insert(id.to_string(), schedule.to_string());
+        }
+    }
+
+    #[test]
+    fn a_cron_deleted_from_another_session_stops_being_live() {
+        // The bug this exists for: made in one window, deleted from a second
+        // one in the same project, and the first window's row went on saying
+        // `scheduled` forever. Crons live on the server; any session can
+        // retire one that another made.
+        let mut ledger = Ledger::default();
+        made(&mut ledger, "made-it", &[("190ef941", "Every 5 minutes")]);
+        assert_eq!(ledger.live("made-it"), vec!["Every 5 minutes".to_string()]);
+
+        // The deletion arrives on a different session's transcript.
+        ledger.deleted.insert("190ef941".to_string());
+        assert!(ledger.live("made-it").is_empty(), "a deletion anywhere retires it");
+    }
+
+    #[test]
+    fn deleting_one_cron_leaves_the_others_alone() {
+        let mut ledger = Ledger::default();
+        made(&mut ledger, "a", &[("one", "Every 5 minutes"), ("two", "Every 10 minutes")]);
+        ledger.deleted.insert("one".to_string());
+        assert_eq!(ledger.live("a"), vec!["Every 10 minutes".to_string()]);
+    }
+
+    #[test]
+    fn a_session_that_made_nothing_has_nothing_live() {
+        let mut ledger = Ledger::default();
+        made(&mut ledger, "a", &[("one", "Every 5 minutes")]);
+        assert!(ledger.live("never-heard-of-it").is_empty());
+    }
+
+    #[test]
+    fn a_deletion_seen_before_the_creation_still_counts() {
+        // Ticks read sessions in an arbitrary order, so the window that
+        // deleted a cron can be read before the one that made it.
+        let mut ledger = Ledger::default();
+        ledger.deleted.insert("190ef941".to_string());
+        made(&mut ledger, "made-it", &[("190ef941", "Every 5 minutes")]);
+        assert!(ledger.live("made-it").is_empty());
     }
 }
 
