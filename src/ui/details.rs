@@ -52,10 +52,16 @@ fn state_line(st: &SessionState, facts: &ActivityFacts, now: SystemTime) -> Stri
 /// One labelled row. `label` is empty on the continuation rows of a block, so
 /// a list of subagents hangs under a single gutter entry rather than repeating
 /// it down the side.
-fn row(label: &str, value: String, t: &Theme, style: Style) -> Line<'static> {
+///
+/// Values are truncated to what the dialog can actually show. The box stops
+/// widening at `modal::MAX_COLS` and the paragraph does not wrap, so anything
+/// longer would be severed mid-word at the border with nothing to say it had
+/// been — and a background command or a worktree path is easily longer.
+fn row(label: &str, value: &str, t: &Theme, style: Style) -> Line<'static> {
+    let room = super::modal::MAX_COLS as usize - LABEL_W;
     Line::from(vec![
         Span::styled(format!("{label:<LABEL_W$}"), Style::default().fg(t.dim)),
-        Span::styled(value, style),
+        Span::styled(super::text::trunc(value, room), style),
     ])
 }
 
@@ -92,11 +98,11 @@ pub fn lines(
                 Some(m) => format!("{} · {m}", a.kind),
                 None => a.kind.clone(),
             };
-            out.push(row(if i == 0 { "subagents" } else { "" }, kind, t, text));
+            out.push(row(if i == 0 { "subagents" } else { "" }, &kind, t, text));
             if !a.task.is_empty() {
                 // The task is the point of the whole dialog, so it is the one
                 // thing here that is not dimmed.
-                out.push(row("", a.task.clone(), t, Style::default().fg(t.accent)));
+                out.push(row("", &a.task, t, Style::default().fg(t.accent)));
             }
         }
     }
@@ -104,15 +110,15 @@ pub fn lines(
     if !s.facts.shells.is_empty() {
         out.push(Line::from(""));
         for (i, cmd) in s.facts.shells.iter().enumerate() {
-            out.push(row(if i == 0 { "shell" } else { "" }, cmd.clone(), t, text));
+            out.push(row(if i == 0 { "shell" } else { "" }, cmd, t, text));
         }
     }
 
     out.push(Line::from(""));
     if let Some(rec) = &s.record {
-        out.push(row("project", rec.cwd.to_string_lossy().into_owned(), t, text));
+        out.push(row("project", &rec.cwd.to_string_lossy(), t, text));
         if let Some(account) = rec.account() {
-            out.push(row("account", account.to_string(), t, text));
+            out.push(row("account", account, t, text));
         }
     }
 
@@ -233,6 +239,18 @@ mod tests {
         let t = text(&s).join("\n");
         assert!(t.contains("Explore"), "{t}");
         assert!(!t.contains("Explore ·"), "no dangling separator: {t}");
+    }
+
+    #[test]
+    fn a_long_command_is_truncated_rather_than_severed_at_the_border() {
+        // The box stops widening at modal::MAX_COLS and the paragraph does not
+        // wrap, so an untruncated value would be cut mid-word with nothing to
+        // say it had been. A background command is easily this long.
+        let mut s = demo(3);
+        s.facts.shells = vec!["CI=true pnpm test --reporter verbose ".repeat(6)];
+        let line = text(&s).into_iter().find(|l| l.contains("CI=true")).expect("shell row");
+        assert!(line.chars().count() <= super::super::modal::MAX_COLS as usize, "{line:?}");
+        assert!(line.ends_with('…'), "and it should say it was cut: {line:?}");
     }
 
     #[test]

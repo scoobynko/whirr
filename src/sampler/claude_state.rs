@@ -257,23 +257,35 @@ pub fn parse_subagent(json: &str) -> Option<Subagent> {
 /// The command a background shell is actually running, dug out of the wrapper
 /// Claude Code's Bash tool builds around it.
 ///
-/// That wrapper is four fixed clauses — source the shell snapshot, set
-/// options, drop an alias, then `eval '<your command>' < /dev/null` — and
-/// showing it verbatim would fill the dialog with boilerplate and hide the one
-/// line worth reading. The closing marker is matched from the right because
-/// the suffix is appended last, so a command containing the same characters
-/// cannot cut the match short.
+/// The wrapper sources a shell snapshot, sets options, drops an alias, then
+/// `eval`s the real command and records the working directory. Showing it
+/// verbatim would fill the dialog with a kilobyte of boilerplate and hide the
+/// one line worth reading.
 ///
-/// An argv that does not have this shape is handed back whole: an unrecognised
-/// wrapper is still better read than dropped.
-pub fn shell_command(argv: &str) -> &str {
+/// Anchored on the trailing `&& pwd -P`, because the middle varies: a command
+/// that reads stdin is not given `< /dev/null`, so anchoring on that redirect
+/// silently fell back to the raw argv for every heredoc — which is how this
+/// was found. The anchor is matched from the right, since the suffix is
+/// appended last and a command containing the same text cannot cut it short.
+///
+/// Newlines collapse to spaces: a heredoc is one argv element containing
+/// several lines, and the dialog draws one line per row.
+///
+/// An argv without this shape is handed back whole. An unrecognised wrapper is
+/// still better read than dropped.
+pub fn shell_command(argv: &str) -> String {
     const OPEN: &str = "&& eval '";
-    const CLOSE: &str = "' < /dev/null";
-    let Some(start) = argv.find(OPEN).map(|i| i + OPEN.len()) else { return argv.trim() };
-    match argv[start..].rfind(CLOSE) {
-        Some(end) => argv[start..start + end].trim(),
-        None => argv.trim(),
-    }
+    const CLOSE: &str = "&& pwd -P";
+    let cmd = match (argv.find(OPEN).map(|i| i + OPEN.len()), argv.rfind(CLOSE)) {
+        (Some(start), Some(end)) if end > start => argv[start..end]
+            .trim_end()
+            .trim_end_matches("< /dev/null")
+            .trim_end()
+            .trim_end_matches('\'')
+            .trim(),
+        _ => argv.trim(),
+    };
+    cmd.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// Seconds since the epoch for the one timestamp shape the transcript uses,
@@ -671,6 +683,46 @@ mod tests {
         // fragment. It must be skipped, not poison the scan.
         let tail = format!("ent\":\"garbage\"}}\n{}", wake_line(T, r#"{"delaySeconds":600}"#));
         assert_eq!(armed_wake_at(&tail, at(T_SECS)), Some(at(T_SECS + 600)));
+    }
+
+    /// The wrapper the Bash tool builds, in both the shapes seen in the wild.
+    fn wrapped(cmd: &str, stdin_closed: bool) -> String {
+        let redirect = if stdin_closed { " < /dev/null" } else { "" };
+        format!(
+            "/bin/zsh -c source /Users/me/.claude/shell-snapshots/snapshot-zsh-1.sh \
+             2>/dev/null || true && setopt NO_EXTENDED_GLOB 2>/dev/null || true \
+             && eval '{cmd}'{redirect} && pwd -P >| /tmp/claude-bc23-cwd"
+        )
+    }
+
+    #[test]
+    fn the_wrapper_comes_off_whether_or_not_stdin_was_closed() {
+        // The redirect is only there for a command that does not read stdin,
+        // so anchoring on it fell back to the raw argv for every heredoc.
+        for closed in [true, false] {
+            assert_eq!(shell_command(&wrapped("CI=true pnpm test", closed)), "CI=true pnpm test");
+        }
+    }
+
+    #[test]
+    fn a_multi_line_command_becomes_one_line() {
+        // A heredoc arrives as one argv element with newlines in it, and the
+        // dialog draws one line per row.
+        let cmd = shell_command(&wrapped("cat <<EOF > f\nhello\nEOF", false));
+        assert_eq!(cmd, "cat <<EOF > f hello EOF");
+    }
+
+    #[test]
+    fn a_command_containing_the_anchor_is_not_cut_short() {
+        // The suffix is appended last, so the match is made from the right.
+        let cmd = shell_command(&wrapped("echo hi && pwd -P >| /tmp/x", false));
+        assert_eq!(cmd, "echo hi && pwd -P >| /tmp/x");
+    }
+
+    #[test]
+    fn an_argv_that_is_not_a_wrapper_is_handed_back_whole() {
+        assert_eq!(shell_command("/bin/zsh -i"), "/bin/zsh -i");
+        assert_eq!(shell_command(""), "");
     }
 
     #[test]

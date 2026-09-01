@@ -25,7 +25,7 @@ const CHROME_COLS: u16 = 6;
 /// process name straight from `libproc`, untruncated (the process *table*
 /// truncates to 24 columns, this doesn't). Without a ceiling, one pathological
 /// name stretches the box across the entire terminal.
-const MAX_COLS: u16 = 60;
+pub(super) const MAX_COLS: u16 = 60;
 
 /// A `w` x `h` rect centred in `area`, clamped so it always fits — a dialog
 /// that would overflow a small terminal is squeezed rather than clipped, so

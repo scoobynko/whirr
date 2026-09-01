@@ -204,7 +204,7 @@ fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32,
         s.facts.shells = claude_state::shell_children(s.pid, parents, crate::mac::proc::exec_path)
             .into_iter()
             .filter_map(crate::mac::proc::args)
-            .map(|argv| claude_state::shell_command(&argv).to_string())
+            .map(|argv| claude_state::shell_command(&argv))
             .collect();
         let Some(rec) = records.get(&s.pid) else { continue };
         s.facts.status = rec.status;
