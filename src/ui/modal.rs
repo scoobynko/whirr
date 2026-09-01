@@ -1,7 +1,8 @@
 //! Dialogs drawn over the whole frame.
 //!
 //! A dialog is what the app already *behaves* like when one is open: while
-//! `pending_kill` is set, `App::on_key` swallows every key and returns early.
+//! `App::dialog` is set, `App::on_key` answers only that dialog's keys and
+//! returns early.
 //! Before this module that state rendered as a single line of red text inside
 //! the Processes card — which meant a confirmation raised from the localhost
 //! card appeared in a different panel, above the one being acted on.
@@ -20,7 +21,7 @@ const CHROME_ROWS: u16 = 4;
 const CHROME_COLS: u16 = 6;
 /// Widest a dialog may grow before its content is truncated instead.
 ///
-/// Content is caller-supplied and some of it is not: `pending_kill` carries a
+/// Content is caller-supplied and some of it is not: `Dialog::Kill` carries a
 /// process name straight from `libproc`, untruncated (the process *table*
 /// truncates to 24 columns, this doesn't). Without a ceiling, one pathological
 /// name stretches the box across the entire terminal.

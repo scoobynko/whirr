@@ -47,8 +47,28 @@ pub enum SortBy {
 /// owning several is reachable there. Storybook disproved it: its row carries
 /// a Vite port, the Storybook UI, and an ephemeral socket, and the lowest of
 /// those is not the page you want. Nothing in a port *number* says which one a
+/// The dialog on screen, if any.
+///
+/// One value rather than four independent flags. These are mutually exclusive
+/// by nature, and separate fields let the type say otherwise — which is why
+/// there used to be a test asserting that no dialog stacks on another. Now the
+/// state cannot represent it, and every dialog costs one arm in each of the
+/// three places that care instead of a fresh `if` in all of them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Dialog {
+    /// Settings, carrying the row the cursor is on — meaningless when the
+    /// dialog is closed, so it lives here rather than beside it.
+    Settings { row: usize },
+    /// What the selected session is doing.
+    Details,
+    /// Confirm sending a signal to `pid`.
+    Kill { pid: i32, name: String },
+    /// Which of a row's several ports to open.
+    PortPick(PortPick),
+}
+
 /// human meant, so when the row is ambiguous whirr asks instead of guessing.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct PortPick {
     /// The row's label, so the dialog can say whose ports these are.
     pub label: String,
@@ -78,18 +98,14 @@ pub struct App {
     /// a render function that already has `&App` needs no extra argument.
     /// Always `settings.theme()` — see `apply_settings`.
     pub theme: crate::ui::theme::Theme,
-    pub settings_open: bool,
-    /// The session details dialog. A flag, not a copy of the session: the
-    /// dialog reads the live snapshot every frame, so a countdown keeps
-    /// counting and a finished subagent leaves while you are looking at it.
-    pub details_open: bool,
+    /// The dialog on screen. While one is up `on_key` answers only its keys.
+    pub dialog: Option<Dialog>,
     /// Set when a setting changes; the event loop drains it and writes the
     /// config. `App` does not touch the filesystem for the same reason it
     /// does not spawn `open`: tests press keys by the hundred, and none of
     /// them should rewrite the user's preferences.
     settings_dirty: bool,
     /// Which row the settings dialog has under its cursor.
-    pub settings_row: usize,
     pub sort_by: SortBy,
     /// One cursor per panel, indexed by `Focus::index`. A single shared cursor
     /// let scrolling one card move another card's view — the panels have
@@ -101,10 +117,6 @@ pub struct App {
     /// then, and `None` forever when the check is off or the network is not
     /// there — the dashboard never waits on it.
     pub update: Option<crate::update::Update>,
-    pub pending_kill: Option<(i32, String)>,
-    /// The open action waiting on "which port?". Set only when a row offers
-    /// more than one browsable port — see `PortPick`.
-    pub pending_port_pick: Option<PortPick>,
     /// A URL the `o` key asked to open, waiting for the event loop to drain it
     /// with `take_open_request`. Spawning the browser here instead would put a
     /// child process behind every keypress — including in tests, which press
@@ -139,15 +151,11 @@ impl App {
             focus: Focus::Processes,
             settings: Settings::default(),
             theme: Settings::default().theme(),
-            settings_open: false,
-            details_open: false,
+            dialog: None,
             settings_dirty: false,
-            settings_row: 0,
             sort_by: SortBy::Cpu,
             selected: [0; Focus::ALL.len()],
             update: None,
-            pending_kill: None,
-            pending_port_pick: None,
             open_request: None,
             focus_request: None,
             message: None,
@@ -179,8 +187,8 @@ impl App {
     /// Change the setting under the cursor. Every row cycles rather than
     /// having separate "next"/"previous" keys — with two to five options each,
     /// a second key would be ceremony.
-    fn cycle_setting(&mut self) {
-        match self.settings_row {
+    fn cycle_setting(&mut self, row: usize) {
+        match row {
             0 => self.settings.palette = self.settings.palette.next(),
             1 => self.settings.accent = self.settings.accent.next(),
             // Inert when the palette forbids it, rather than silently
@@ -519,74 +527,65 @@ impl App {
         // Dialogs are checked before anything else and always return, so no
         // key can act on the dashboard behind one — and no second dialog can
         // stack on top of the first.
-        if self.details_open {
-            // Read-only, so anything that is not "close" is simply ignored
-            // rather than acted on behind the dialog.
-            if matches!(key.code, KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q')) {
-                self.details_open = false;
-            }
-            return;
-        }
-
-        if self.settings_open {
-            match key.code {
-                KeyCode::Up => self.settings_row = self.settings_row.saturating_sub(1),
-                KeyCode::Down => {
-                    self.settings_row = (self.settings_row + 1).min(Self::SETTINGS_ROWS - 1);
-                }
-                // Every row cycles, so left, right and Enter all mean "next
-                // value" — there is nothing to go back to that going forward
-                // does not reach.
-                KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
-                    self.cycle_setting();
-                }
-                KeyCode::Esc | KeyCode::Char('s') => self.settings_open = false,
-                _ => {}
-            }
-            return;
-        }
-
-        if let Some(pick) = self.pending_port_pick.clone() {
-            match key.code {
-                // '1' addresses the first entry, so the offset is one less.
-                KeyCode::Char(c @ '1'..='9') => {
-                    let i = c as usize - '1' as usize;
-                    if let Some(&port) = pick.ports.get(i) {
-                        self.open_request = Some(Self::localhost_url(port));
-                        self.pending_port_pick = None;
+        if let Some(dialog) = self.dialog.clone() {
+            match dialog {
+                // Read-only, so anything that is not "close" is simply
+                // ignored rather than acted on behind the dialog.
+                Dialog::Details => {
+                    if matches!(key.code, KeyCode::Esc | KeyCode::Char('d' | 'q')) {
+                        self.dialog = None;
                     }
                 }
-                KeyCode::Char('n') | KeyCode::Esc => self.pending_port_pick = None,
-                _ => {}
-            }
-            return;
-        }
-
-        if let Some((pid, name)) = self.pending_kill.clone() {
-            match key.code {
-                KeyCode::Char('y') => {
-                    let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
-                    if rc != 0 {
-                        self.message = Some(format!("could not signal {name} ({pid})"));
+                Dialog::Settings { row } => match key.code {
+                    KeyCode::Up => self.dialog = Some(Dialog::Settings { row: row.saturating_sub(1) }),
+                    KeyCode::Down => {
+                        let row = (row + 1).min(Self::SETTINGS_ROWS - 1);
+                        self.dialog = Some(Dialog::Settings { row });
                     }
-                    self.pending_kill = None;
-                }
-                KeyCode::Char('n') | KeyCode::Esc => self.pending_kill = None,
-                // Every other key is ignored rather than treated as a cancel.
-                // Cancelling on anything-but-y meant an arrow or a Tab
-                // dismissed the question silently, and the next `k` read as
-                // having done nothing. A dialog answers the keys it offers.
-                _ => {}
+                    // Every row cycles, so left, right and Enter all mean
+                    // "next value" — there is nothing to go back to that
+                    // going forward does not reach.
+                    KeyCode::Left | KeyCode::Right | KeyCode::Enter | KeyCode::Char(' ') => {
+                        self.cycle_setting(row);
+                    }
+                    KeyCode::Esc | KeyCode::Char('s') => self.dialog = None,
+                    _ => {}
+                },
+                Dialog::PortPick(pick) => match key.code {
+                    // '1' addresses the first entry, so the offset is one less.
+                    KeyCode::Char(c @ '1'..='9') => {
+                        let i = c as usize - '1' as usize;
+                        if let Some(&port) = pick.ports.get(i) {
+                            self.open_request = Some(Self::localhost_url(port));
+                            self.dialog = None;
+                        }
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => self.dialog = None,
+                    _ => {}
+                },
+                Dialog::Kill { pid, name } => match key.code {
+                    KeyCode::Char('y') => {
+                        let rc = unsafe { libc::kill(pid, libc::SIGTERM) };
+                        if rc != 0 {
+                            self.message = Some(format!("could not signal {name} ({pid})"));
+                        }
+                        self.dialog = None;
+                    }
+                    KeyCode::Char('n') | KeyCode::Esc => self.dialog = None,
+                    // Every other key is ignored rather than treated as a
+                    // cancel. Cancelling on anything-but-y meant an arrow or a
+                    // Tab dismissed the question silently, and the next `k`
+                    // read as having done nothing. A dialog answers the keys
+                    // it offers.
+                    _ => {}
+                },
             }
             return;
         }
 
         match key.code {
             KeyCode::Char('q') => self.should_quit = true,
-            KeyCode::Char('s') => {
-                self.settings_open = true;
-                self.settings_row = 0;
-            }
+            KeyCode::Char('s') => self.dialog = Some(Dialog::Settings { row: 0 }),
             // Each panel keeps its own cursor across a Tab, so returning to a
             // card puts you back where you left it.
             KeyCode::Tab => self.focus = self.focus.next(),
@@ -605,7 +604,7 @@ impl App {
             KeyCode::Char('k') => match self.focus {
                 Focus::Processes => {
                     if let Some(p) = self.processes().get(self.selected()) {
-                        self.pending_kill = Some((p.pid, p.name.clone()));
+                        self.dialog = Some(Dialog::Kill { pid: p.pid, name: p.name.clone() });
                     }
                 }
                 // Only dev servers are killable. Sessions and system agents are
@@ -614,7 +613,10 @@ impl App {
                     if let Some(r) = self.localhost_rows().get(self.selected()) {
                         let n = r.ports.len();
                         let ports = if n == 1 { "port" } else { "ports" };
-                        self.pending_kill = Some((r.pid, format!("{} ({n} {ports})", r.label)));
+                        self.dialog = Some(Dialog::Kill {
+                            pid: r.pid,
+                            name: format!("{} ({n} {ports})", r.label),
+                        });
                     }
                 }
                 Focus::Sessions | Focus::Others => {}
@@ -631,7 +633,9 @@ impl App {
             // Details are for sessions only: the other cards have nothing a
             // dialog could say that their row does not already fit.
             KeyCode::Char('d') if matches!(self.focus, Focus::Sessions) => {
-                self.details_open = self.selected() < self.sessions().len();
+                if self.selected() < self.sessions().len() {
+                    self.dialog = Some(Dialog::Details);
+                }
             }
             KeyCode::Char('o') if matches!(self.focus, Focus::Sessions) => {
                 if let Some(s) = self.sessions().get(self.selected()).filter(|s| s.jumpable) {
@@ -654,7 +658,7 @@ impl App {
                         [port] => self.open_request = Some(Self::localhost_url(*port)),
                         _ => {
                             let ports = ports.into_iter().take(MAX_PICKABLE_PORTS).collect();
-                            self.pending_port_pick = Some(PortPick { label, ports });
+                            self.dialog = Some(Dialog::PortPick(PortPick { label, ports }));
                         }
                     }
                 }
@@ -789,7 +793,7 @@ mod tests {
     fn ctrl_c_quits_even_during_pending_kill() {
         let mut a = app_with_procs();
         a.on_key(key('k'));
-        assert!(a.pending_kill.is_some());
+        assert!(matches!(a.dialog, Some(Dialog::Kill { .. })));
         let ctrl_c = KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL);
         a.on_key(ctrl_c);
         assert!(a.should_quit, "Ctrl-C must quit, not just cancel the kill prompt");
@@ -799,18 +803,18 @@ mod tests {
     fn kill_flow_requires_confirm() {
         let mut a = app_with_procs();
         a.on_key(key('k'));
-        assert!(a.pending_kill.is_some());
+        assert!(matches!(a.dialog, Some(Dialog::Kill { .. })));
         a.on_key(key('n'));
-        assert!(a.pending_kill.is_none());
+        assert!(!matches!(a.dialog, Some(Dialog::Kill { .. })));
     }
 
     #[test]
     fn s_opens_settings_and_esc_closes_it() {
         let mut a = App::demo();
         press(&mut a, 's');
-        assert!(a.settings_open, "s should open the dialog");
+        assert!(matches!(a.dialog, Some(Dialog::Settings { .. })), "s should open the dialog");
         a.on_key(KeyEvent::from(KeyCode::Esc));
-        assert!(!a.settings_open, "Esc should close it");
+        assert!(!matches!(a.dialog, Some(Dialog::Settings { .. })), "Esc should close it");
     }
 
     #[test]
@@ -827,28 +831,32 @@ mod tests {
 
     #[test]
     fn the_settings_dialog_swallows_keys_that_would_otherwise_act() {
-        // Same discipline as the other two dialogs: k must not raise a kill
-        // confirmation underneath the settings.
+        // Same discipline as the other dialogs: k must not raise a kill
+        // confirmation underneath the settings, and q must not quit.
         let mut a = App::demo();
         press(&mut a, 's');
         press(&mut a, 'k');
         press(&mut a, 'q');
-        assert!(a.pending_kill.is_none(), "no dialog should stack on settings");
+        assert!(matches!(a.dialog, Some(Dialog::Settings { .. })), "settings should still be up");
         assert!(!a.should_quit, "q is inert while a dialog is open");
-        assert!(a.settings_open);
+        assert!(matches!(a.dialog, Some(Dialog::Settings { .. })));
     }
 
     #[test]
     fn the_cursor_moves_between_rows_and_stops_at_the_ends() {
         let mut a = App::demo();
+        let row = |a: &App| match a.dialog {
+            Some(Dialog::Settings { row }) => row,
+            _ => panic!("the settings dialog should be open"),
+        };
         press(&mut a, 's');
-        assert_eq!(a.settings_row, 0);
+        assert_eq!(row(&a), 0);
         a.on_key(KeyEvent::from(KeyCode::Up));
-        assert_eq!(a.settings_row, 0, "must not run off the top");
+        assert_eq!(row(&a), 0, "must not run off the top");
         for _ in 0..20 {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }
-        assert_eq!(a.settings_row, App::SETTINGS_ROWS - 1, "must not run off the bottom");
+        assert_eq!(row(&a), App::SETTINGS_ROWS - 1, "must not run off the bottom");
     }
 
     #[test]
@@ -903,7 +911,7 @@ mod tests {
         let mut a = app_with_procs();
         a.on_key(key('k'));
         a.on_key(KeyEvent::from(KeyCode::Esc));
-        assert!(a.pending_kill.is_none(), "Esc is the other obvious way out of a dialog");
+        assert!(!matches!(a.dialog, Some(Dialog::Kill { .. })), "Esc is the other obvious way out of a dialog");
     }
 
     #[test]
@@ -915,7 +923,7 @@ mod tests {
             let mut a = app_with_procs();
             a.on_key(key('k'));
             a.on_key(KeyEvent::from(k));
-            assert!(a.pending_kill.is_some(), "{k:?} should not dismiss the dialog");
+            assert!(matches!(a.dialog, Some(Dialog::Kill { .. })), "{k:?} should not dismiss the dialog");
         }
     }
 
@@ -1108,7 +1116,9 @@ mod tests {
         a.focus = Focus::Localhost;
         a.select(0); // demo()'s first localhost row is glassbook-frontend
         press(&mut a, 'k');
-        let (pid, label) = a.pending_kill.clone().expect("localhost row must be killable");
+        let Some(Dialog::Kill { pid, name: label }) = a.dialog.clone() else {
+            panic!("localhost row must be killable")
+        };
         assert_eq!(pid, 501);
         assert!(label.contains("glassbook-frontend"), "dialog should name the process: {label}");
         assert!(label.contains('3'), "dialog should say how many ports die with it: {label}");
@@ -1129,7 +1139,7 @@ mod tests {
         let mut a = demo_on_localhost(1);
         press(&mut a, 'o');
         assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:3000"));
-        assert!(a.pending_port_pick.is_none(), "one candidate needs no dialog");
+        assert!(!matches!(a.dialog, Some(Dialog::PortPick(_))), "one candidate needs no dialog");
     }
 
     #[test]
@@ -1140,7 +1150,9 @@ mod tests {
         let mut a = demo_on_localhost(0);
         press(&mut a, 'o');
         assert_eq!(a.take_open_request(), None, "it must not guess");
-        let pick = a.pending_port_pick.clone().expect("a choice should be pending");
+        let Some(Dialog::PortPick(pick)) = a.dialog.clone() else {
+            panic!("a choice should be pending")
+        };
         assert_eq!(pick.ports, vec![4206, 6006]);
         assert_eq!(pick.label, "glassbook-frontend");
     }
@@ -1151,7 +1163,7 @@ mod tests {
         press(&mut a, 'o');
         press(&mut a, '2');
         assert_eq!(a.take_open_request().as_deref(), Some("http://localhost:6006"));
-        assert!(a.pending_port_pick.is_none(), "the dialog should close once answered");
+        assert!(!matches!(a.dialog, Some(Dialog::PortPick(_))), "the dialog should close once answered");
     }
 
     #[test]
@@ -1160,7 +1172,7 @@ mod tests {
             let mut a = demo_on_localhost(0);
             press(&mut a, 'o');
             a.on_key(KeyEvent::from(cancel));
-            assert!(a.pending_port_pick.is_none(), "{cancel:?} should close the picker");
+            assert!(!matches!(a.dialog, Some(Dialog::PortPick(_))), "{cancel:?} should close the picker");
             assert_eq!(a.take_open_request(), None, "cancelling must not open anything");
         }
     }
@@ -1172,7 +1184,7 @@ mod tests {
         let mut a = demo_on_localhost(0);
         press(&mut a, 'o');
         press(&mut a, '3');
-        assert!(a.pending_port_pick.is_some(), "3 addresses no entry");
+        assert!(matches!(a.dialog, Some(Dialog::PortPick(_))), "3 addresses no entry");
         assert_eq!(a.take_open_request(), None);
     }
 
@@ -1182,8 +1194,8 @@ mod tests {
         let mut a = demo_on_localhost(0);
         press(&mut a, 'o');
         press(&mut a, 'k');
-        assert!(a.pending_kill.is_none(), "a second dialog must not stack on the first");
-        assert!(a.pending_port_pick.is_some());
+        assert!(!matches!(a.dialog, Some(Dialog::Kill { .. })), "a second dialog must not stack on the first");
+        assert!(matches!(a.dialog, Some(Dialog::PortPick(_))));
     }
 
     #[test]
@@ -1255,7 +1267,7 @@ mod tests {
             a.select(0);
             press(&mut a, 'k');
             assert!(
-                a.pending_kill.is_none(),
+                !matches!(a.dialog, Some(Dialog::Kill { .. })),
                 "{focus:?} must not be killable — a stray k must not end a session or a system agent"
             );
         }
@@ -1324,12 +1336,12 @@ mod tests {
         let mut a = App::demo();
         a.focus = Focus::Sessions;
         a.on_key(key('d'));
-        assert!(a.details_open, "d should open the dialog");
+        assert!(matches!(a.dialog, Some(Dialog::Details)), "d should open the dialog");
         a.on_key(KeyEvent::from(KeyCode::Esc));
-        assert!(!a.details_open, "esc should close it");
+        assert!(!matches!(a.dialog, Some(Dialog::Details)), "esc should close it");
         a.on_key(key('d'));
         a.on_key(key('d'));
-        assert!(!a.details_open, "d again should close it too");
+        assert!(!matches!(a.dialog, Some(Dialog::Details)), "d again should close it too");
     }
 
     #[test]
@@ -1340,7 +1352,7 @@ mod tests {
             let mut a = App::demo();
             a.focus = focus;
             a.on_key(key('d'));
-            assert!(!a.details_open, "{focus:?} should not open a session dialog");
+            assert!(!matches!(a.dialog, Some(Dialog::Details)), "{focus:?} should not open a session dialog");
         }
     }
 
@@ -1354,9 +1366,9 @@ mod tests {
         for k in [key('k'), key('s'), KeyEvent::from(KeyCode::Tab), KeyEvent::from(KeyCode::Down)] {
             a.on_key(k);
         }
-        assert!(a.details_open, "the dialog should still be up");
-        assert!(a.pending_kill.is_none(), "no kill should have been raised");
-        assert!(!a.settings_open, "no dialog should stack on it");
+        // One assertion covers all three now: `dialog` is one value, so
+        // "still Details" is also "no kill was raised" and "nothing stacked".
+        assert!(matches!(a.dialog, Some(Dialog::Details)), "the dialog should still be up");
         assert_eq!(a.focus, Focus::Sessions, "focus should not have moved");
     }
 

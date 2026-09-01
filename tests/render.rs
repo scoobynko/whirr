@@ -1,7 +1,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use whirr::app::{App, Focus};
+use whirr::app::{App, Dialog, Focus};
 use whirr::sampler::ProcInfo;
 use whirr::ui;
 use whirr::ui::theme::Theme;
@@ -461,7 +461,7 @@ fn demo_pending_kill(focus: Focus) -> App {
     let mut app = demo_with_focus(focus);
     app.select(0);
     app.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-    assert!(app.pending_kill.is_some(), "{focus:?} row should be killable");
+    assert!(matches!(app.dialog, Some(Dialog::Kill { .. })), "{focus:?} row should be killable");
     app
 }
 
@@ -529,7 +529,7 @@ fn a_pathological_target_name_cannot_stretch_the_dialog_across_the_screen() {
     let f = app.fast.as_mut().expect("demo() ingests a fast snapshot");
     f.processes[0].name = "x".repeat(300);
     app.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-    assert!(app.pending_kill.is_some());
+    assert!(matches!(app.dialog, Some(Dialog::Kill { .. })));
 
     // Measure the box off its own top border: from the corner that opens the
     // titled row to the corner that closes it.
@@ -564,7 +564,7 @@ fn demo_pending_port_pick() -> App {
     let mut app = demo_with_focus(Focus::Localhost);
     app.select(0); // glassbook-frontend: 4206, 6006, 63643
     app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
-    assert!(app.pending_port_pick.is_some(), "a multi-port row should ask");
+    assert!(matches!(app.dialog, Some(Dialog::PortPick(_))), "a multi-port row should ask");
     app
 }
 
@@ -617,7 +617,7 @@ fn the_port_picker_renders_at_every_size_without_panicking() {
 fn demo_settings_open() -> App {
     let mut app = App::demo();
     app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
-    assert!(app.settings_open);
+    assert!(matches!(app.dialog, Some(Dialog::Settings { .. })));
     app
 }
 
