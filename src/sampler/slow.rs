@@ -54,6 +54,102 @@ fn attach_titles(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32
     }
 }
 
+// Reading Claude Code's state off disk. The decisions live next door in
+// `claude_state`, which stays pure the way `sessions` does: everything here
+// returns facts, and nothing here decides anything.
+
+/// Every config root under `home`: `~/.claude` and any sibling a second
+/// account uses. A root is a directory holding a `projects` directory —
+/// `~/.claude.json` is a file and several `~/.claude*.bak` files exist, and
+/// neither is a tree to read sessions out of.
+fn config_roots(home: &Path) -> Vec<PathBuf> {
+    let mut roots: Vec<PathBuf> = std::fs::read_dir(home)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with(".claude"))
+                && p.join("projects").is_dir()
+        })
+        .collect();
+    roots.sort();
+    roots
+}
+/// Where a session's transcript lives, and the directory beside it that holds
+/// its subagents.
+///
+/// The encoded name is tried first because it is pure arithmetic on the cwd.
+/// The fallback exists because that encoding has changed before and a session
+/// whose directory does not match must not silently lose its state — one
+/// `read_dir` of a directory with a handful of entries is cheap enough to pay
+/// only when the cheap answer misses.
+fn transcript_of(rec: &claude_state::SessionRecord) -> Option<PathBuf> {
+    let projects = rec.root.join("projects");
+    let file = format!("{}.jsonl", rec.session_id);
+    let guess = projects.join(claude_state::project_dir_name(&rec.cwd)).join(&file);
+    if guess.is_file() {
+        return Some(guess);
+    }
+    std::fs::read_dir(&projects)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .map(|e| e.path().join(&file))
+        .find(|p| p.is_file())
+}
+/// The subagents a session is running right now, newest first.
+///
+/// `dir` is the `subagents` directory beside the transcript. A missing
+/// directory means the session has never spawned one, which is none of them,
+/// not an error.
+///
+/// Only the transcripts still being written to are read: a subagent writes
+/// continuously while it runs and never again once it finishes, so mtime
+/// separates the live ones from a session's whole history of them without
+/// opening a single file. The small `.meta.json` beside each live one is then
+/// worth reading; the transcript itself never is.
+fn hot_subagents(dir: &Path, now: SystemTime) -> Vec<claude_state::Subagent> {
+    let mut live: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
+        .filter_map(|e| {
+            let at = e.metadata().and_then(|m| m.modified()).ok()?;
+            (now.duration_since(at).ok()? <= claude_state::SUBAGENT_HOT).then(|| (at, e.path()))
+        })
+        .collect();
+    live.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    live
+        .iter()
+        .map(|(_, p)| {
+            // A subagent whose meta cannot be read is still a subagent that is
+            // running. Dropping it would quietly shrink the count on the card,
+            // which is the one number the card promises.
+            std::fs::read_to_string(p.with_extension("meta.json"))
+                .ok()
+                .and_then(|t| claude_state::parse_subagent(&t))
+                .unwrap_or_default()
+        })
+        .collect()
+}
+/// The last `bytes` of a file, as text, for a tail scan that must not read a
+/// multi-megabyte transcript from the front.
+fn read_tail(path: &Path, bytes: u64) -> Option<String> {
+    use std::io::{Read, Seek, SeekFrom};
+    let mut f = std::fs::File::open(path).ok()?;
+    let len = f.metadata().ok()?.len();
+    f.seek(SeekFrom::Start(len.saturating_sub(bytes))).ok()?;
+    let mut buf = Vec::with_capacity(bytes.min(len) as usize);
+    f.read_to_end(&mut buf).ok()?;
+    // The cut lands mid-line and mid-character; both are the caller's
+    // problem to skip, and a lossy decode keeps it to a broken first line.
+    Some(String::from_utf8_lossy(&buf).into_owned())
+}
+
 /// How much of a transcript's tail to read looking for an armed wakeup.
 ///
 /// A session waiting on one is quiet, so the call that armed it is within a
@@ -63,11 +159,11 @@ fn attach_titles(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32
 /// either at the end or absent.
 const TAIL: u64 = 64 * 1024;
 
-/// Time until this session's armed wakeup fires, if it has one armed.
-fn pending_wake(transcript: &Path, now: SystemTime) -> Option<Duration> {
+/// When this session's armed wakeup will fire, if it has one armed.
+fn pending_wake(transcript: &Path) -> Option<SystemTime> {
     let grew_until = std::fs::metadata(transcript).and_then(|m| m.modified()).ok()?;
-    let tail = claude_state::read_tail(transcript, TAIL)?;
-    claude_state::armed_wake_at(&tail, grew_until)?.duration_since(now).ok()
+    let tail = read_tail(transcript, TAIL)?;
+    claude_state::armed_wake_at(&tail, grew_until)
 }
 
 /// Attach what each session is doing: busy, looping, running a background
@@ -81,7 +177,7 @@ fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32,
         return;
     }
     let roots = std::env::var_os("HOME")
-        .map(|h| claude_state::config_roots(Path::new(&h)))
+        .map(|h| config_roots(Path::new(&h)))
         .unwrap_or_default();
     // Every root's session files, read once per tick: a few hundred bytes
     // each, one per session that is running.
@@ -102,54 +198,35 @@ fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32,
         .collect();
     let now = SystemTime::now();
     for s in sessions.iter_mut() {
-        let shells =
-            claude_state::shell_children(s.pid, parents, crate::mac::proc::exec_path);
-        let mut facts = claude_state::ActivityFacts {
-            shells: shells.len(),
-            // One argv read, for one shell, only when a session has one — the
-            // call copies a 256 KB argument area and has no business anywhere
-            // near a full-system walk.
-            shell: shells.first().and_then(|&p| crate::mac::proc::args(p)).map(|argv| {
-                claude_state::shell_command(&argv).to_string()
-            }),
-            ..Default::default()
-        };
-        if let Some(rec) = records.get(&s.pid) {
-            s.about = sessions::About {
-                cwd: Some(rec.cwd.clone()),
-                account: rec
-                    .root
-                    .file_name()
-                    .map(|n| n.to_string_lossy().into_owned()),
-                version: rec.version.clone(),
-                started_at: rec.started_at,
-            };
-            facts.status = rec.status;
-            facts.status_age = rec
-                .status_updated_at
-                .and_then(|t| now.duration_since(t).ok());
-            if let Some(transcript) = claude_state::transcript_of(rec) {
-                // `<session id>.jsonl` and `<session id>/subagents` are
-                // siblings, so dropping the extension gets from one to the
-                // other.
-                let dir = transcript.with_extension("").join("subagents");
-                facts.subagents = claude_state::hot_subagents(&dir, now);
-                // The heartbeat of a working session. One stat, and the only
-                // thing that separates a long turn from a hung one.
-                facts.writing_age = std::fs::metadata(&transcript)
-                    .and_then(|m| m.modified())
-                    .ok()
-                    .and_then(|t| now.duration_since(t).ok());
-                // Only a quiet session can be waiting on a wakeup, and this
-                // is the one read in the tick that touches a large file — so
-                // the session actively writing to its transcript is exactly
-                // the one that never pays for it.
-                if rec.status != Some(claude_state::Status::Busy) {
-                    facts.wakes_in = pending_wake(&transcript, now);
-                }
+        // One argv read per shell, and only for sessions that have one: the
+        // call copies a 256 KB argument area and has no business anywhere
+        // near a full-system walk.
+        s.facts.shells = claude_state::shell_children(s.pid, parents, crate::mac::proc::exec_path)
+            .into_iter()
+            .filter_map(crate::mac::proc::args)
+            .map(|argv| claude_state::shell_command(&argv).to_string())
+            .collect();
+        let Some(rec) = records.get(&s.pid) else { continue };
+        s.facts.status = rec.status;
+        s.facts.status_since = rec.status_updated_at;
+        if let Some(transcript) = transcript_of(rec) {
+            // `<session id>.jsonl` and `<session id>/subagents` are siblings,
+            // so dropping the extension gets from one to the other.
+            let dir = transcript.with_extension("").join("subagents");
+            s.facts.subagents = hot_subagents(&dir, now);
+            // The heartbeat of a working session. One stat, and the only
+            // thing that separates a long turn from a hung one.
+            s.facts.last_write =
+                std::fs::metadata(&transcript).and_then(|m| m.modified()).ok();
+            // Only a quiet session can be waiting on a wakeup, and this is
+            // the one read in the tick that touches a large file — so the
+            // session actively writing to its transcript is exactly the one
+            // that never pays for it.
+            if rec.status != Some(claude_state::Status::Busy) {
+                s.facts.wake_at = pending_wake(&transcript);
             }
         }
-        s.state = claude_state::state(&facts);
+        s.record = Some(rec.clone());
     }
 }
 
@@ -438,16 +515,18 @@ mod live {
         let mut sessions = super::scan_sessions();
         let parents = crate::host::parent_map();
         super::attach_state(&mut sessions, &parents);
+        let now = std::time::SystemTime::now();
         for s in &sessions {
+            let st = super::claude_state::state(&s.facts, now);
             println!(
-                "{:>6} {:<28} {:<9} {:?} subagents={} shell={:?} warn={}",
+                "{:>6} {:<28} {:<9} {:?} subagents={} shells={:?} warn={}",
                 s.pid,
                 s.project,
                 s.tty.as_deref().unwrap_or("-"),
-                s.state.activity,
-                s.state.subagents.len(),
-                s.state.shell,
-                s.state.warn
+                st.activity,
+                st.subagents,
+                s.facts.shells,
+                st.warn
             );
         }
         assert!(!sessions.is_empty(), "whirr's own session should be running this");
@@ -455,7 +534,7 @@ mod live {
         // prove the fixture matches what Claude Code actually produces.
         let home = std::env::var("HOME").expect("HOME");
         let mut seen = 0;
-        for root in super::claude_state::config_roots(std::path::Path::new(&home)) {
+        for root in super::config_roots(std::path::Path::new(&home)) {
             for meta in glob_meta(&root.join("projects")) {
                 let text = std::fs::read_to_string(&meta).expect("readable");
                 let parsed = super::claude_state::parse_subagent(&text);

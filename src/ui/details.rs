@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use ratatui::prelude::*;
 
 use super::theme::Theme;
-use crate::sampler::claude_state::Activity;
+use crate::sampler::claude_state::{self, Activity, ActivityFacts, SessionState};
 use crate::sampler::sessions::ClaudeSession;
 use crate::units::{fmt_bytes, fmt_duration};
 
@@ -29,10 +29,9 @@ pub fn title(s: &ClaudeSession) -> &str {
 
 /// The state line, spelled out. The card had eight columns and had to say
 /// `loop 4m`; here there is room to say what that means.
-fn state_line(s: &ClaudeSession) -> String {
-    let st = &s.state;
+fn state_line(st: &SessionState, facts: &ActivityFacts, now: SystemTime) -> String {
     match &st.activity {
-        Activity::Busy => match st.writing_age {
+        Activity::Busy => match facts.last_write.and_then(|t| now.duration_since(t).ok()) {
             // The heartbeat that separates a long turn from a hung one, and
             // the reason the card did or did not flag this row.
             Some(d) => format!("busy · writing {} ago", fmt_duration(d.as_secs())),
@@ -50,6 +49,16 @@ fn state_line(s: &ClaudeSession) -> String {
     }
 }
 
+/// One labelled row. `label` is empty on the continuation rows of a block, so
+/// a list of subagents hangs under a single gutter entry rather than repeating
+/// it down the side.
+fn row(label: &str, value: String, t: &Theme, style: Style) -> Line<'static> {
+    Line::from(vec![
+        Span::styled(format!("{label:<LABEL_W$}"), Style::default().fg(t.dim)),
+        Span::styled(value, style),
+    ])
+}
+
 /// Everything the dialog says about `s`.
 ///
 /// `cpu` and `mem` come from the fast snapshot, joined by pid the way the card
@@ -62,88 +71,66 @@ pub fn lines(
     mem: Option<u64>,
     now: SystemTime,
 ) -> Vec<Line<'static>> {
-    let dim = Style::default().fg(t.dim);
+    let st = claude_state::state(&s.facts, now);
     let text = Style::default().fg(t.text);
+    let dim = Style::default().fg(t.dim);
     let mut out: Vec<Line> = Vec::new();
 
-    let tone = if s.state.warn { t.amber } else { t.accent };
+    let tone = super::sessions::tone(&st, t);
     out.push(Line::from(vec![
-        Span::styled(format!("{} ", super::sessions::glyph(&s.state.activity)), Style::default().fg(tone)),
-        Span::styled(state_line(s), Style::default().fg(tone)),
+        Span::styled(format!("{} ", super::sessions::glyph(&st.activity)), Style::default().fg(tone)),
+        Span::styled(state_line(&st, &s.facts, now), Style::default().fg(tone)),
     ]));
 
     // Each block is skipped entirely when it has nothing to say, so an idle
     // session with no subagents and no shell is a short dialog rather than a
     // tall one full of dashes.
-    if !s.state.subagents.is_empty() {
+    if !s.facts.subagents.is_empty() {
         out.push(Line::from(""));
-        for (i, a) in s.state.subagents.iter().enumerate() {
-            let label = if i == 0 { "subagents" } else { "" };
+        for (i, a) in s.facts.subagents.iter().enumerate() {
             let kind = match &a.model {
                 Some(m) => format!("{} · {m}", a.kind),
                 None => a.kind.clone(),
             };
-            out.push(Line::from(vec![
-                Span::styled(format!("{label:<LABEL_W$}"), dim),
-                Span::styled(kind, text),
-            ]));
+            out.push(row(if i == 0 { "subagents" } else { "" }, kind, t, text));
             if !a.task.is_empty() {
-                out.push(Line::from(vec![
-                    Span::styled(" ".repeat(LABEL_W), dim),
-                    // The task is the point of the whole dialog, so it is the
-                    // one thing here that is not dimmed.
-                    Span::styled(a.task.clone(), Style::default().fg(t.accent)),
-                ]));
+                // The task is the point of the whole dialog, so it is the one
+                // thing here that is not dimmed.
+                out.push(row("", a.task.clone(), t, Style::default().fg(t.accent)));
             }
         }
     }
 
-    if let Some(cmd) = &s.state.shell {
+    if !s.facts.shells.is_empty() {
         out.push(Line::from(""));
-        out.push(Line::from(vec![
-            Span::styled(format!("{:<LABEL_W$}", "shell"), dim),
-            Span::styled(cmd.clone(), text),
-        ]));
+        for (i, cmd) in s.facts.shells.iter().enumerate() {
+            out.push(row(if i == 0 { "shell" } else { "" }, cmd.clone(), t, text));
+        }
     }
 
     out.push(Line::from(""));
-    if let Some(cwd) = &s.about.cwd {
-        out.push(Line::from(vec![
-            Span::styled(format!("{:<LABEL_W$}", "project"), dim),
-            Span::styled(cwd.to_string_lossy().into_owned(), text),
-        ]));
-    }
-    if let Some(account) = &s.about.account {
-        out.push(Line::from(vec![
-            Span::styled(format!("{:<LABEL_W$}", "account"), dim),
-            Span::styled(account.clone(), text),
-        ]));
+    if let Some(rec) = &s.record {
+        out.push(row("project", rec.cwd.to_string_lossy().into_owned(), t, text));
+        if let Some(account) = rec.account() {
+            out.push(row("account", account.to_string(), t, text));
+        }
     }
 
     // Identity and cost on two lines rather than four labelled rows: none of
-    // it is worth a gutter of its own, and together it reads as one fact
+    // it is worth a gutter of its own, and together each reads as one fact
     // about the process.
     let mut ident = vec![format!("pid {}", s.pid)];
-    if let Some(tty) = &s.tty {
-        ident.push(tty.clone());
-    }
-    if let Some(v) = &s.about.version {
-        ident.push(format!("claude {v}"));
-    }
+    ident.extend(s.tty.clone());
+    ident.extend(s.record.as_ref().and_then(|r| r.version.clone()).map(|v| format!("claude {v}")));
     out.push(Line::styled(ident.join(" · "), dim));
 
     let mut usage: Vec<String> = Vec::new();
-    if let Some(started) = s.about.started_at {
-        if let Ok(open) = now.duration_since(started) {
-            usage.push(format!("open {}", fmt_duration(open.as_secs())));
-        }
+    let started = s.record.as_ref().and_then(|r| r.started_at);
+    if let Some(open) = started.and_then(|t| now.duration_since(t).ok()) {
+        usage.push(format!("open {}", fmt_duration(open.as_secs())));
     }
-    if let Some(c) = cpu {
-        usage.push(format!("cpu {c:.1}%"));
-    }
-    if let Some(m) = mem {
-        usage.push(format!("mem {}", fmt_bytes(m)));
-    }
+    usage.extend(cpu.map(|c| format!("cpu {c:.1}%")));
+    usage.extend(mem.map(|m| format!("mem {}", fmt_bytes(m))));
     if !usage.is_empty() {
         out.push(Line::styled(usage.join(" · "), dim));
     }
@@ -224,8 +211,8 @@ mod tests {
         // Every optional clause absent at once: no state file, no tty, no
         // fast-snapshot row. It must render rather than panic or lie.
         let mut bare = demo(0);
-        bare.state = Default::default();
-        bare.about = Default::default();
+        bare.facts = Default::default();
+        bare.record = None;
         bare.tty = None;
         let out = lines(&bare, &Theme::dark(), None, None, SystemTime::now());
         let t: String = out
@@ -241,7 +228,7 @@ mod tests {
     #[test]
     fn a_model_less_subagent_shows_only_its_kind() {
         let mut s = demo(0);
-        s.state.subagents =
+        s.facts.subagents =
             vec![Subagent { kind: "Explore".into(), model: None, task: "Look around".into() }];
         let t = text(&s).join("\n");
         assert!(t.contains("Explore"), "{t}");

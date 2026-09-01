@@ -2,7 +2,6 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Focus};
-use crate::sampler::claude_state::Activity;
 use crate::sampler::ports::{PortGroup, PortRow};
 use super::text::{pad, trunc, width as disp_width};
 
@@ -291,15 +290,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
 /// A pid with no state — a port-sourced row whose process the session scan
 /// did not match — keeps the hollow shape rather than inventing one.
 fn claude_marker(app: &App, pid: i32) -> (&'static str, ratatui::style::Color) {
-    let Some(st) = app.session_state(pid) else { return ("○", app.theme.text) };
-    let colour = if st.warn {
-        app.theme.amber
-    } else if matches!(st.activity, Activity::Busy) {
-        app.theme.accent
-    } else {
-        app.theme.text
-    };
-    (super::sessions::glyph(&st.activity), colour)
+    match app.session_facts(pid) {
+        Some(f) => {
+            let st = crate::sampler::claude_state::state(f, std::time::SystemTime::now());
+            (super::sessions::glyph(&st.activity), super::sessions::tone(&st, &app.theme))
+        }
+        // A port-sourced row whose process the session scan never matched.
+        None => ("○", app.theme.text),
+    }
 }
 
 #[cfg(test)]
@@ -314,7 +312,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::app::{App, Focus};
-    use crate::sampler::claude_state::{Activity, SessionState};
+    use crate::sampler::claude_state::{ActivityFacts, Status};
     use crate::sampler::ports::{PortGroup, PortRow};
     use crate::sampler::sessions::ClaudeSession;
     use crate::sampler::{SlowSnap, Snapshot};
@@ -346,7 +344,7 @@ mod tests {
 
     /// A card holding one Claude row and the session it belongs to, joined by
     /// pid the way the real snapshot joins them.
-    fn app_with_session(activity: Activity, warn: bool) -> App {
+    fn app_with_session(facts: ActivityFacts) -> App {
         let mut app = App::new(false);
         app.ingest(Snapshot::Slow(SlowSnap {
             rows: vec![PortRow {
@@ -361,8 +359,8 @@ mod tests {
                 title: None,
                 jumpable: false,
                 tty: Some("ttys020".into()),
-                state: SessionState { activity, subagents: Vec::new(), shell: None, writing_age: None, warn },
-                about: Default::default(),
+                facts,
+                record: None,
             }],
             stale: false,
         }));
@@ -790,16 +788,30 @@ mod tests {
         // Below the width that earns three cards, sessions live inside the
         // grouped ports card. Reading the same shape in both places is the
         // difference between one design at every size and two.
-        for (activity, shape) in [
-            (Activity::Busy, '●'),
-            (Activity::Loop { wakes_in: Duration::from_secs(60) }, '◐'),
-            (Activity::BgJob, '◐'),
-            (Activity::Idle { since: None }, '○'),
-        ] {
-            let app = app_with_session(activity.clone(), false);
+        let now = std::time::SystemTime::now();
+        let cases = [
+            (ActivityFacts { status: Some(Status::Busy), ..Default::default() }, '\u{25cf}'),
+            (
+                ActivityFacts {
+                    wake_at: Some(now + Duration::from_secs(60)),
+                    ..Default::default()
+                },
+                '\u{25d0}',
+            ),
+            (
+                ActivityFacts { shells: vec!["pnpm test".into()], ..Default::default() },
+                '\u{25d0}',
+            ),
+            (
+                ActivityFacts { status: Some(Status::Idle), ..Default::default() },
+                '\u{25cb}',
+            ),
+        ];
+        for (facts, shape) in cases {
+            let app = app_with_session(facts.clone());
             let out = draw_app(&app, 60, 10).join("\n");
             let row = out.lines().find(|l| l.contains("axterio")).expect("the row is drawn");
-            assert!(row.contains(shape), "{activity:?} should wear {shape}: {row:?}");
+            assert!(row.contains(shape), "{facts:?} should wear {shape}: {row:?}");
         }
     }
 

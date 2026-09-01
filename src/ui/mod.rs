@@ -90,14 +90,15 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// subagent that finishes disappears while the dialog is open.
 fn render_session_details(f: &mut Frame, area: Rect, app: &App) {
     let Some(s) = app.sessions().get(app.selected()) else { return };
-    let lines = details::lines(
-        s,
-        &app.theme,
-        app.cpu_of(s.pid),
-        app.mem_of(s.pid),
-        std::time::SystemTime::now(),
-    );
-    let accent = if s.state.warn { app.theme.amber } else { app.theme.accent };
+    let now = std::time::SystemTime::now();
+    let lines = details::lines(s, &app.theme, app.cpu_of(s.pid), app.mem_of(s.pid), now);
+    // How alarming the box looks is the caller's call, and a dialog border is
+    // a different question from what colour a state word is — an idle session
+    // still gets a readable border rather than a dim one.
+    let accent = match crate::sampler::claude_state::state(&s.facts, now).warn {
+        true => app.theme.amber,
+        false => app.theme.accent,
+    };
     // Left, not centred: every line here has a label gutter, and centring
     // each one on its own width makes that gutter zigzag.
     modal::render(f, area, &app.theme, details::title(s), lines, accent, Alignment::Left);

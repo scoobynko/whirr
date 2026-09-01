@@ -10,7 +10,7 @@
 
 use std::path::PathBuf;
 
-use super::claude_state::SessionState;
+use super::claude_state::{ActivityFacts, SessionRecord};
 
 /// What `slow.rs` reads per candidate pid.
 pub struct SessionFacts {
@@ -40,29 +40,17 @@ pub struct ClaudeSession {
     /// Controlling terminal, e.g. `ttys021`. This is what distinguishes two
     /// sessions in the same project: it says which pane to go to.
     pub tty: Option<String>,
-    /// Working, waiting, or about to start again on its own. Filled in by
-    /// `slow.rs` from Claude Code's own state files; a session it cannot read
-    /// keeps the `Unknown` default rather than being dropped from the card.
-    pub state: SessionState,
-    /// The rest of the session's identity, for the details dialog. None of it
-    /// earns a column on the card, and all of it is the first thing you want
-    /// once a row has your attention.
-    pub about: About,
-}
-
-/// What the card knows about a session but has no room to say.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct About {
-    /// The full working directory, not the basename the card shows.
-    pub cwd: Option<PathBuf>,
-    /// Which config root this session belongs to — `.claude`, or the second
-    /// account's tree. Two sessions with the same project name can be two
-    /// different logins.
-    pub account: Option<String>,
-    /// The Claude Code build running it.
-    pub version: Option<String>,
-    /// When the process started, for "open 5h".
-    pub started_at: Option<std::time::SystemTime>,
+    /// What `slow.rs` observed about what this session is doing. Raw
+    /// observations, not conclusions: `claude_state::state` turns them into
+    /// an activity against the `now` of whichever frame asks.
+    pub facts: ActivityFacts,
+    /// Claude Code's own record of the session, when there is one to read.
+    ///
+    /// Carried whole rather than copied field by field: everything the
+    /// details dialog wants — the full path, the account, the build, when it
+    /// started — is already here, and a parallel struct holding a subset
+    /// would only be a second thing to keep in step.
+    pub record: Option<SessionRecord>,
 }
 
 /// Keep the Claude processes and turn them into rows, ordered by project, then
@@ -91,8 +79,8 @@ pub fn build_sessions(facts: &[SessionFacts]) -> Vec<ClaudeSession> {
             // Both filled in by `slow.rs` once the host has been asked.
             title: None,
             jumpable: false,
-            state: SessionState::default(),
-            about: About::default(),
+            facts: ActivityFacts::default(),
+            record: None,
         })
         .collect();
     out.sort_by(|a, b| {

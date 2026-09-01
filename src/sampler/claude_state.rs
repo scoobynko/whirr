@@ -16,6 +16,11 @@
 //! `roots` is plural on purpose. `CLAUDE_CONFIG_DIR` moves this whole tree,
 //! and a work account running beside a personal one is common enough that
 //! reading only `~/.claude` would quietly show half a machine.
+//!
+//! Pure by design, the same way `sessions` is: the reads live in `slow.rs`
+//! and arrive here as `ActivityFacts`. Everything below is a parser, a policy
+//! or a type — nothing here touches the filesystem, so all of it is testable
+//! against a string.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -40,7 +45,7 @@ const FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
 /// A subagent transcript touched this recently is one still being written to.
 /// Subagents write continuously while they run and never again once they
 /// finish, so file mtime answers "is one out right now" without a read.
-const SUBAGENT_HOT: Duration = Duration::from_secs(60);
+pub const SUBAGENT_HOT: Duration = Duration::from_secs(60);
 
 /// How far past an armed wakeup's own timestamp the transcript may have grown
 /// before the wakeup is treated as spent rather than pending.
@@ -75,36 +80,40 @@ pub enum Activity {
     Unknown,
 }
 
-/// Everything `state` needs, gathered by the caller so the decision itself
-/// stays pure and testable.
-#[derive(Clone, Debug, Default)]
+/// What a sampler observed about a session, as moments rather than ages.
+///
+/// Timestamps, deliberately: an age computed when the sample was taken is
+/// already ten seconds stale by the next one, which a countdown makes visible.
+/// Everything derived from these is derived against the `now` of the frame
+/// that asks, so nothing here ever goes off.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ActivityFacts {
     pub status: Option<Status>,
-    /// Age of that status, i.e. how long the session has been in it.
-    pub status_age: Option<Duration>,
-    /// Live shell children of the session process.
-    pub shells: usize,
-    /// What the first of them is running, once the wrapper is stripped off.
-    pub shell: Option<String>,
+    /// When the session last entered that status.
+    pub status_since: Option<SystemTime>,
+    /// What each live shell child is running, once the wrapper is stripped
+    /// off. One field rather than a count beside a command: those two could
+    /// disagree, and "no shells but here is what one is running" is not a
+    /// state anything should be able to represent.
+    pub shells: Vec<String>,
     /// The subagents running right now.
     pub subagents: Vec<Subagent>,
-    /// Time until an armed wakeup fires, when one is armed.
-    pub wakes_in: Option<Duration>,
-    /// How long since anything was written to the session's transcript. This
-    /// is the heartbeat of a session that is working.
-    pub writing_age: Option<Duration>,
+    /// When an armed wakeup will fire, if one is armed.
+    pub wake_at: Option<SystemTime>,
+    /// When anything was last written to the session's transcript. This is the
+    /// heartbeat of a session that is working.
+    pub last_write: Option<SystemTime>,
 }
 
-/// A session's activity and whether it is worth pulling the eye to.
+/// What the facts add up to. Derived on demand and never stored: every field
+/// here is a conclusion, so keeping a copy beside the evidence would only
+/// create something that can drift from it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionState {
     pub activity: Activity,
-    pub subagents: Vec<Subagent>,
-    /// The background command a shell child is running, when there is one.
-    pub shell: Option<String>,
-    /// How long since the session last wrote to its transcript. The card has
-    /// no room for it; the dialog is where "busy but silent" becomes visible.
-    pub writing_age: Option<Duration>,
+    /// How many subagents are out — a count, because that is all the card and
+    /// the state word need. The dialog reads the facts for who they are.
+    pub subagents: usize,
     /// Something here is running without you: a loop, an orphaned shell, a
     /// turn that never finished, or a session left open for days.
     pub warn: bool,
@@ -112,13 +121,7 @@ pub struct SessionState {
 
 impl Default for SessionState {
     fn default() -> Self {
-        SessionState {
-            activity: Activity::Unknown,
-            subagents: Vec::new(),
-            shell: None,
-            writing_age: None,
-            warn: false,
-        }
+        SessionState { activity: Activity::Unknown, subagents: 0, warn: false }
     }
 }
 
@@ -129,15 +132,22 @@ impl Default for SessionState {
 /// in the same turn has already been superseded by the work happening now.
 /// Below that, a loop outranks a shell because it restarts the model, and a
 /// shell only spends a machine.
-pub fn state(f: &ActivityFacts) -> SessionState {
+pub fn state(f: &ActivityFacts, now: SystemTime) -> SessionState {
+    let since = |t: Option<SystemTime>| t.and_then(|t| now.duration_since(t).ok());
+    let status_age = since(f.status_since);
+    let writing_age = since(f.last_write);
+    // A wakeup whose moment has passed is not pending: the session is either
+    // already working again, or the loop ended without saying so.
+    let wakes_in = f.wake_at.and_then(|t| t.duration_since(now).ok());
+
     let activity = if f.status == Some(Status::Busy) {
         Activity::Busy
-    } else if let Some(w) = f.wakes_in {
+    } else if let Some(w) = wakes_in {
         Activity::Loop { wakes_in: w }
-    } else if f.shells > 0 {
+    } else if !f.shells.is_empty() {
         Activity::BgJob
     } else if f.status == Some(Status::Idle) {
-        Activity::Idle { since: f.status_age }
+        Activity::Idle { since: status_age }
     } else {
         // Nothing said it is idle; it may simply be unreadable.
         Activity::Unknown
@@ -147,19 +157,12 @@ pub fn state(f: &ActivityFacts) -> SessionState {
         // An unreadable transcript says nothing either way, and inventing a
         // stall from missing evidence would cry wolf on every session whirr
         // cannot follow.
-        Activity::Busy => f.shells == 0 && f.writing_age.is_some_and(|d| d >= STALLED),
-        Activity::Loop { .. } => true,
-        Activity::BgJob => true,
+        Activity::Busy => f.shells.is_empty() && writing_age.is_some_and(|d| d >= STALLED),
+        Activity::Loop { .. } | Activity::BgJob => true,
         Activity::Idle { since } => since.is_some_and(|d| d >= FORGOTTEN),
         Activity::Unknown => false,
     };
-    SessionState {
-        activity,
-        subagents: f.subagents.clone(),
-        shell: f.shell.clone(),
-        writing_age: f.writing_age,
-        warn,
-    }
+    SessionState { activity, subagents: f.subagents.len(), warn }
 }
 
 /// One running session as `sessions/<pid>.json` describes it.
@@ -176,6 +179,15 @@ pub struct SessionRecord {
     /// The config root this record was found under, so the transcript can be
     /// looked up in the same tree.
     pub root: PathBuf,
+}
+
+impl SessionRecord {
+    /// Which login this session belongs to: the config root's own name,
+    /// `.claude` or whatever a second account's tree is called. Two sessions
+    /// with the same project name can be two different accounts.
+    pub fn account(&self) -> Option<&str> {
+        self.root.file_name().and_then(|n| n.to_str())
+    }
 }
 
 /// Parse one `sessions/<pid>.json`. `root` is carried through rather than
@@ -205,26 +217,6 @@ pub fn parse_session_record(json: &str, root: &Path) -> Option<SessionRecord> {
     })
 }
 
-/// Every config root under `home`: `~/.claude` and any sibling a second
-/// account uses. A root is a directory holding a `projects` directory —
-/// `~/.claude.json` is a file and several `~/.claude*.bak` files exist, and
-/// neither is a tree to read sessions out of.
-pub fn config_roots(home: &Path) -> Vec<PathBuf> {
-    let mut roots: Vec<PathBuf> = std::fs::read_dir(home)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| {
-            p.file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n.starts_with(".claude"))
-                && p.join("projects").is_dir()
-        })
-        .collect();
-    roots.sort();
-    roots
-}
 
 /// The directory name Claude Code gives a project: its path with every
 /// separator, dot and space flattened to a dash.
@@ -235,31 +227,12 @@ pub fn project_dir_name(cwd: &Path) -> String {
         .collect()
 }
 
-/// Where a session's transcript lives, and the directory beside it that holds
-/// its subagents.
-///
-/// The encoded name is tried first because it is pure arithmetic on the cwd.
-/// The fallback exists because that encoding has changed before and a session
-/// whose directory does not match must not silently lose its state — one
-/// `read_dir` of a directory with a handful of entries is cheap enough to pay
-/// only when the cheap answer misses.
-pub fn transcript_of(rec: &SessionRecord) -> Option<PathBuf> {
-    let projects = rec.root.join("projects");
-    let file = format!("{}.jsonl", rec.session_id);
-    let guess = projects.join(project_dir_name(&rec.cwd)).join(&file);
-    if guess.is_file() {
-        return Some(guess);
-    }
-    std::fs::read_dir(&projects)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .map(|e| e.path().join(&file))
-        .find(|p| p.is_file())
-}
 
 /// One subagent a session has out right now.
-#[derive(Clone, Debug, PartialEq)]
+///
+/// The default is what an unreadable `.meta.json` leaves: a subagent that is
+/// certainly running, described only as far as the disk allowed.
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Subagent {
     /// `general-purpose`, `Explore`, or whatever the agent was dispatched as.
     pub kind: String,
@@ -270,31 +243,6 @@ pub struct Subagent {
     pub task: String,
 }
 
-/// The subagents a session is running right now, newest first.
-///
-/// `dir` is the `subagents` directory beside the transcript. A missing
-/// directory means the session has never spawned one, which is none of them,
-/// not an error.
-///
-/// Only the transcripts still being written to are read: a subagent writes
-/// continuously while it runs and never again once it finishes, so mtime
-/// separates the live ones from a session's whole history of them without
-/// opening a single file. The small `.meta.json` beside each live one is then
-/// worth reading; the transcript itself never is.
-pub fn hot_subagents(dir: &Path, now: SystemTime) -> Vec<Subagent> {
-    let mut live: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-        .filter_map(|e| {
-            let at = e.metadata().and_then(|m| m.modified()).ok()?;
-            (now.duration_since(at).ok()? <= SUBAGENT_HOT).then(|| (at, e.path()))
-        })
-        .collect();
-    live.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
-    live.iter().filter_map(|(_, p)| parse_subagent(&std::fs::read_to_string(p.with_extension("meta.json")).ok()?)).collect()
-}
 
 /// One `agent-<id>.meta.json`.
 pub fn parse_subagent(json: &str) -> Option<Subagent> {
@@ -428,44 +376,52 @@ fn is_shell(path: &Path) -> bool {
     )
 }
 
-/// The last `bytes` of a file, as text, for a tail scan that must not read a
-/// multi-megabyte transcript from the front.
-pub fn read_tail(path: &Path, bytes: u64) -> Option<String> {
-    use std::io::{Read, Seek, SeekFrom};
-    let mut f = std::fs::File::open(path).ok()?;
-    let len = f.metadata().ok()?.len();
-    f.seek(SeekFrom::Start(len.saturating_sub(bytes))).ok()?;
-    let mut buf = Vec::with_capacity(bytes.min(len) as usize);
-    f.read_to_end(&mut buf).ok()?;
-    // The cut lands mid-line and mid-character; both are the caller's
-    // problem to skip, and a lossy decode keeps it to a broken first line.
-    Some(String::from_utf8_lossy(&buf).into_owned())
-}
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// A fixed `now`, so every fact below is written as "this long before the
+    /// frame that reads it" and no test depends on the clock.
+    const NOW: SystemTime = UNIX_EPOCH;
+
+    fn ago(secs: u64) -> SystemTime {
+        NOW - Duration::from_secs(secs)
+    }
+
+    fn ahead(secs: u64) -> SystemTime {
+        NOW + Duration::from_secs(secs)
+    }
+
     fn facts() -> ActivityFacts {
-        ActivityFacts { status: Some(Status::Idle), status_age: Some(Duration::from_secs(60)), ..Default::default() }
+        ActivityFacts {
+            status: Some(Status::Idle),
+            status_since: Some(ago(60)),
+            ..Default::default()
+        }
+    }
+
+    /// The state these facts add up to at `NOW`.
+    fn derived(f: &ActivityFacts) -> SessionState {
+        state(f, NOW)
     }
 
     #[test]
     fn a_busy_session_reads_as_busy() {
         let f = ActivityFacts { status: Some(Status::Busy), ..facts() };
-        assert_eq!(state(&f).activity, Activity::Busy);
-        assert!(!state(&f).warn, "working is the normal case, not a warning");
+        assert_eq!(derived(&f).activity, Activity::Busy);
+        assert!(!derived(&f).warn, "working is the normal case, not a warning");
     }
 
     #[test]
     fn a_busy_session_writing_nothing_has_stopped_working() {
         let f = ActivityFacts {
             status: Some(Status::Busy),
-            writing_age: Some(STALLED + Duration::from_secs(1)),
+            last_write: Some(ago(STALLED.as_secs() + 1)),
             ..facts()
         };
-        assert_eq!(state(&f).activity, Activity::Busy);
-        assert!(state(&f).warn, "a busy session with a frozen transcript must be flagged");
+        assert_eq!(derived(&f).activity, Activity::Busy);
+        assert!(derived(&f).warn, "a busy session with a frozen transcript must be flagged");
     }
 
     #[test]
@@ -475,11 +431,11 @@ mod tests {
         // flags an agentic run that is working perfectly.
         let f = ActivityFacts {
             status: Some(Status::Busy),
-            status_age: Some(Duration::from_secs(4 * 60 * 60)),
-            writing_age: Some(Duration::from_secs(3)),
+            status_since: Some(ago(4 * 60 * 60)),
+            last_write: Some(ago(3)),
             ..facts()
         };
-        assert!(!state(&f).warn, "four hours of a turn that is still writing is fine");
+        assert!(!derived(&f).warn, "four hours of a turn that is still writing is fine");
     }
 
     #[test]
@@ -488,25 +444,33 @@ mod tests {
         // running for minutes. The shell is the proof it is still going.
         let f = ActivityFacts {
             status: Some(Status::Busy),
-            shells: 1,
-            writing_age: Some(STALLED * 4),
+            shells: vec!["pnpm test".into()],
+            last_write: Some(ago(STALLED.as_secs() * 4)),
             ..facts()
         };
-        assert!(!state(&f).warn, "a live shell is a session still doing something");
+        assert!(!derived(&f).warn, "a live shell is a session still doing something");
     }
 
     #[test]
     fn a_busy_session_whose_transcript_cannot_be_read_is_not_accused() {
-        let f = ActivityFacts { status: Some(Status::Busy), writing_age: None, ..facts() };
-        assert!(!state(&f).warn, "missing evidence is not evidence of a stall");
+        let f = ActivityFacts { status: Some(Status::Busy), last_write: None, ..facts() };
+        assert!(!derived(&f).warn, "missing evidence is not evidence of a stall");
     }
 
     #[test]
     fn an_armed_wakeup_reads_as_a_loop_and_always_warns() {
-        let f = ActivityFacts { wakes_in: Some(Duration::from_secs(240)), ..facts() };
-        let s = state(&f);
+        let f = ActivityFacts { wake_at: Some(ahead(240)), ..facts() };
+        let s = derived(&f);
         assert_eq!(s.activity, Activity::Loop { wakes_in: Duration::from_secs(240) });
         assert!(s.warn, "a session that will restart itself is always worth seeing");
+    }
+
+    #[test]
+    fn a_wakeup_whose_moment_has_passed_is_not_a_loop() {
+        // Either the session is already working again, or the loop ended
+        // without saying so. Either way there is nothing to count down to.
+        let f = ActivityFacts { wake_at: Some(ago(1)), ..facts() };
+        assert!(matches!(derived(&f).activity, Activity::Idle { .. }));
     }
 
     #[test]
@@ -515,17 +479,17 @@ mod tests {
         // been superseded; showing a countdown would be describing the past.
         let f = ActivityFacts {
             status: Some(Status::Busy),
-            wakes_in: Some(Duration::from_secs(240)),
-            shells: 2,
+            wake_at: Some(ahead(240)),
+            shells: vec!["pnpm test".into()],
             ..facts()
         };
-        assert_eq!(state(&f).activity, Activity::Busy);
+        assert_eq!(derived(&f).activity, Activity::Busy);
     }
 
     #[test]
     fn a_shell_outliving_its_turn_reads_as_a_background_job() {
-        let f = ActivityFacts { shells: 1, ..facts() };
-        let s = state(&f);
+        let f = ActivityFacts { shells: vec!["pnpm test".into()], ..facts() };
+        let s = derived(&f);
         assert_eq!(s.activity, Activity::BgJob);
         assert!(s.warn);
     }
@@ -533,28 +497,43 @@ mod tests {
     #[test]
     fn a_loop_outranks_a_background_shell() {
         // Both are unattended, but only the loop starts the model again.
-        let f = ActivityFacts { shells: 1, wakes_in: Some(Duration::from_secs(30)), ..facts() };
-        assert!(matches!(state(&f).activity, Activity::Loop { .. }));
+        let f = ActivityFacts {
+            shells: vec!["pnpm test".into()],
+            wake_at: Some(ahead(30)),
+            ..facts()
+        };
+        assert!(matches!(derived(&f).activity, Activity::Loop { .. }));
     }
 
     #[test]
     fn a_quiet_session_is_idle_and_only_warns_once_forgotten() {
-        assert_eq!(
-            state(&facts()).activity,
-            Activity::Idle { since: Some(Duration::from_secs(60)) }
-        );
-        assert!(!state(&facts()).warn, "waiting for you is the normal case");
-        let old = ActivityFacts { status_age: Some(FORGOTTEN + Duration::from_secs(1)), ..facts() };
-        assert!(state(&old).warn, "days of silence is a session you have forgotten");
+        assert_eq!(derived(&facts()).activity, Activity::Idle { since: Some(Duration::from_secs(60)) });
+        assert!(!derived(&facts()).warn, "waiting for you is the normal case");
+        let old =
+            ActivityFacts { status_since: Some(ago(FORGOTTEN.as_secs() + 1)), ..facts() };
+        assert!(derived(&old).warn, "days of silence is a session you have forgotten");
     }
 
     #[test]
     fn a_session_with_no_readable_state_is_unknown_not_idle() {
         // An older Claude Code writes no session file. Claiming it is idle
         // would be inventing a fact; claiming it warns would cry wolf.
-        let f = ActivityFacts { status: None, status_age: None, ..Default::default() };
-        assert_eq!(state(&f).activity, Activity::Unknown);
-        assert!(!state(&f).warn);
+        let f = ActivityFacts::default();
+        assert_eq!(derived(&f).activity, Activity::Unknown);
+        assert!(!derived(&f).warn);
+    }
+
+    #[test]
+    fn subagents_are_counted_not_copied() {
+        let f = ActivityFacts {
+            status: Some(Status::Busy),
+            subagents: vec![
+                Subagent { kind: "Explore".into(), model: None, task: "look".into() },
+                Subagent { kind: "general-purpose".into(), model: None, task: "build".into() },
+            ],
+            ..facts()
+        };
+        assert_eq!(derived(&f).subagents, 2);
     }
 
     const RECORD: &str = r#"{"pid":9087,"sessionId":"d6b2a4ae","cwd":"/Users/me/p/whirr",

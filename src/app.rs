@@ -6,8 +6,8 @@ use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
 use crate::sampler::ports::{self, PortGroup, PortRow};
 use crate::settings::Settings;
-use crate::sampler::claude_state::{Activity, SessionState, Subagent};
-use crate::sampler::sessions::{About, ClaudeSession};
+use crate::sampler::claude_state::{ActivityFacts, SessionRecord, Status, Subagent};
+use crate::sampler::sessions::ClaudeSession;
 use crate::sampler::{
     BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
     Snapshot,
@@ -229,6 +229,41 @@ impl App {
     /// history can never show whether the newest data lands at the right
     /// edge of the chart (that gap is exactly how the spark::render
     /// left-align bug shipped invisibly).
+    /// A moment `secs` ago, for demo facts that must read the same however
+    /// long the binary has been running.
+    fn ago(secs: u64) -> SystemTime {
+        SystemTime::now() - Duration::from_secs(secs)
+    }
+
+    /// One demo session, with the record a real one would have been read from.
+    fn demo_session(
+        pid: i32,
+        project: &str,
+        title: Option<&str>,
+        tty: Option<&str>,
+        open_for: u64,
+        facts: ActivityFacts,
+    ) -> ClaudeSession {
+        ClaudeSession {
+            pid,
+            project: project.into(),
+            title: title.map(Into::into),
+            jumpable: tty.is_some(),
+            tty: tty.map(Into::into),
+            record: Some(SessionRecord {
+                pid,
+                session_id: format!("demo-{pid}"),
+                cwd: format!("/Users/me/Projects/{project}").into(),
+                status: facts.status,
+                status_updated_at: facts.status_since,
+                version: Some("2.1.252".into()),
+                started_at: Some(Self::ago(open_for)),
+                root: "/Users/me/.claude".into(),
+            }),
+            facts,
+        }
+    }
+
     pub fn demo() -> Self {
         let mut app = Self::new(false);
         for v in [15.0_f32, 28.0, 52.0, 70.0, 58.0, 33.0, 22.0, 40.0, 63.0, 77.0, 49.0, 26.0] {
@@ -312,35 +347,46 @@ impl App {
                 },
             ],
             // One session per state the card can show, so the demo exercises
-            // every branch of the renderer rather than four idle rows.
+            // every branch of the renderer rather than four idle rows. Facts,
+            // not states: the demo goes through the same derivation the real
+            // sampler does, so a change to the rules shows up here too.
             sessions: vec![
-                ClaudeSession { pid: 601, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys020".into()),
-                    about: About { cwd: Some("/Users/me/Projects/axterio".into()), account: Some(".claude".into()), version: Some("2.1.252".into()), started_at: Some(SystemTime::now() - Duration::from_secs(18000)) },
-                    state: SessionState {
-                        activity: Activity::Busy,
-                        subagents: vec![
-                            Subagent { kind: "general-purpose".into(), model: Some("haiku".into()), task: "Run full quality checks".into() },
-                            Subagent { kind: "Explore".into(), model: Some("sonnet".into()), task: "Find every call site of useChart".into() },
-                        ],
-                        shell: None,
-                        writing_age: Some(Duration::from_secs(3)),
-                        warn: false,
-                    } },
-                ClaudeSession { pid: 602, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys021".into()),
-                    about: About { cwd: Some("/Users/me/Projects/axterio".into()), account: Some(".claude".into()), version: Some("2.1.252".into()), started_at: Some(SystemTime::now() - Duration::from_secs(7200)) },
-                    state: SessionState { activity: Activity::Loop { wakes_in: Duration::from_secs(260) }, subagents: Vec::new(), shell: None, writing_age: None, warn: true } },
-                ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), jumpable: true, tty: Some("ttys004".into()),
-                    about: About { cwd: Some("/Users/me/Projects/whirr".into()), account: Some(".claude".into()), version: Some("2.1.252".into()), started_at: Some(SystemTime::now() - Duration::from_secs(600)) },
-                    state: SessionState { activity: Activity::Idle { since: Duration::from_secs(90).into() }, subagents: Vec::new(), shell: None, writing_age: None, warn: false } },
-                ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, jumpable: false, tty: None,
-                    about: About { cwd: Some("/Users/me/Projects/eye-claudius".into()), account: Some(".claude-work".into()), version: Some("2.1.251".into()), started_at: Some(SystemTime::now() - Duration::from_secs(432000)) },
-                    state: SessionState {
-                        activity: Activity::BgJob,
-                        subagents: Vec::new(),
-                        shell: Some("CI=true pnpm test".into()),
-                        writing_age: None,
-                        warn: true,
-                    } },
+                Self::demo_session(601, "axterio", None, Some("ttys020"), 18_000, ActivityFacts {
+                    status: Some(Status::Busy),
+                    status_since: Some(Self::ago(600)),
+                    last_write: Some(Self::ago(3)),
+                    subagents: vec![
+                        Subagent {
+                            kind: "general-purpose".into(),
+                            model: Some("haiku".into()),
+                            task: "Run full quality checks".into(),
+                        },
+                        Subagent {
+                            kind: "Explore".into(),
+                            model: Some("sonnet".into()),
+                            task: "Find every call site of useChart".into(),
+                        },
+                    ],
+                    ..Default::default()
+                }),
+                Self::demo_session(602, "axterio", None, Some("ttys021"), 7_200, ActivityFacts {
+                    status: Some(Status::Idle),
+                    status_since: Some(Self::ago(300)),
+                    wake_at: Some(SystemTime::now() + Duration::from_secs(260)),
+                    ..Default::default()
+                }),
+                Self::demo_session(603, "whirr", Some("✳ Fix the port picker"), Some("ttys004"), 600,
+                    ActivityFacts {
+                        status: Some(Status::Idle),
+                        status_since: Some(Self::ago(90)),
+                        ..Default::default()
+                    }),
+                Self::demo_session(604, "eye-claudius", None, None, 432_000, ActivityFacts {
+                    status: Some(Status::Idle),
+                    status_since: Some(Self::ago(120)),
+                    shells: vec!["CI=true pnpm test".into()],
+                    ..Default::default()
+                }),
             ],
             stale: false,
         }));
@@ -429,13 +475,13 @@ impl App {
         self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.mem)
     }
 
-    /// What a session is doing, for a row that knows only its pid.
+    /// What was observed about a session, for a row that knows only its pid.
     ///
     /// The grouped ports card carries Claude sessions too, at widths where
     /// they get no card of their own, and its rows are port-sourced — so the
-    /// state has to be joined back on by pid rather than carried with them.
-    pub fn session_state(&self, pid: i32) -> Option<&SessionState> {
-        self.sessions().iter().find(|s| s.pid == pid).map(|s| &s.state)
+    /// facts have to be joined back on by pid rather than carried with them.
+    pub fn session_facts(&self, pid: i32) -> Option<&ActivityFacts> {
+        self.sessions().iter().find(|s| s.pid == pid).map(|s| &s.facts)
     }
 
     /// Port rows belonging to the localhost card.

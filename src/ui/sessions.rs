@@ -9,8 +9,16 @@ use ratatui::widgets::Paragraph;
 
 
 use crate::app::{App, Focus};
-use crate::sampler::claude_state::{Activity, SessionState};
+use crate::sampler::claude_state::{self, Activity, SessionState};
+use super::theme::Theme;
 use crate::sampler::sessions::ClaudeSession;
+
+// `glyph`, `tone` and `label` are the shared vocabulary for a session's
+// state, not private to this card: the grouped ports card wears them one tier
+// down and the details dialog spells them out. They live here because this is
+// the card that defines the look — but there is exactly one of each, because
+// three renderers answering "what colour is this session" differently is how
+// one design language becomes two.
 
 /// The shape of a session at a glance, before any word is read: filled is
 /// working, half-filled is running with nobody watching, hollow is waiting for
@@ -23,6 +31,19 @@ pub fn glyph(a: &Activity) -> &'static str {
         Activity::Loop { .. } | Activity::BgJob => "◐",
         Activity::Idle { .. } => "○",
         Activity::Unknown => "·",
+    }
+}
+
+/// The colour a session's state wears. Amber is the whole anomaly treatment —
+/// a loop, an orphaned shell, a turn that never ended, a session open for days
+/// — so the state word says which and no marker column has to repeat it.
+pub fn tone(st: &SessionState, t: &Theme) -> Color {
+    if st.warn {
+        t.amber
+    } else if matches!(st.activity, Activity::Busy) {
+        t.accent
+    } else {
+        t.dim
     }
 }
 
@@ -45,19 +66,18 @@ pub fn label(st: &SessionState) -> String {
     match &st.activity {
         // Subagents only ever run inside a turn, so they qualify "busy"
         // rather than standing as a state of their own.
-        Activity::Busy if !st.subagents.is_empty() => {
-            format!("busy \u{00d7}{}", st.subagents.len())
-        }
+        Activity::Busy if st.subagents > 0 => format!("busy \u{00d7}{}", st.subagents),
         Activity::Busy => "busy".into(),
         Activity::Loop { wakes_in } => format!("loop {}", brief(*wakes_in)),
         Activity::BgJob => "bg job".into(),
         // How long only matters once it is long enough to be a surprise;
         // until then it is a number that changes every second and says
         // nothing.
-        Activity::Idle { since } => match since.filter(|_| st.warn) {
-            Some(d) => format!("idle {}", brief(d)),
-            None => "idle".into(),
-        },
+        // How long only matters once it is long enough to be a surprise;
+        // until then it is a number that changes every second and says
+        // nothing.
+        Activity::Idle { since: Some(d) } if st.warn => format!("idle {}", brief(*d)),
+        Activity::Idle { .. } => "idle".into(),
         Activity::Unknown => String::new(),
     }
 }
@@ -69,6 +89,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(block, area);
 
     let sessions = app.sessions();
+    // Derived here, once per frame, rather than stored beside the facts: a
+    // countdown that was computed when the sampler last ran would only move
+    // every ten seconds.
+    let now = std::time::SystemTime::now();
     if sessions.is_empty() {
         f.render_widget(
             Paragraph::new("none running").style(Style::default().fg(app.theme.dim)),
@@ -125,7 +149,8 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // Reserved for the whole card only when some row has something to put
     // there, the same rule the tty column follows: eight blank columns on
     // every row would be worse than the glyph carrying it alone.
-    let any_state = sessions.iter().any(|s| !label(&s.state).is_empty());
+    let any_state =
+        sessions.iter().any(|s| !label(&claude_state::state(&s.facts, now)).is_empty());
     let state_w = if any_state && room >= MIN_LABEL + STATE_W { STATE_W } else { 0 };
     let label_w = room - state_w;
     // The project gets what it needs up to a ceiling; the title takes the
@@ -152,21 +177,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 // An em-dash with no percent sign: unknown, not idle.
                 None => format!("{:>w$}", "—", w = CPU_W),
             };
-            let st = &s.state;
-            // Amber is the whole anomaly treatment: a loop, an orphaned
-            // shell, a turn that never ended, a session open for days. The
-            // state word says which, so a separate marker column would be
-            // paying eight cells to repeat it.
-            let tone = if st.warn {
-                app.theme.amber
-            } else if matches!(st.activity, Activity::Busy) {
-                app.theme.accent
-            } else {
-                app.theme.dim
-            };
+            let st = claude_state::state(&s.facts, now);
+            let tone = tone(&st, &app.theme);
             Line::from(vec![
                 Span::styled(
-                    format!(" {}", super::sessions::glyph(&st.activity)),
+                    format!(" {}", glyph(&st.activity)),
                     if selected { base } else { Style::default().fg(tone) },
                 ),
                 // The host's own title when it has one — cmux names a
@@ -201,7 +216,7 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 Span::styled(
                     match state_w {
                         0 => String::new(),
-                        w => format!("{:<w$}", super::text::trunc(&label(st), w), w = w),
+                        w => format!("{:<w$}", super::text::trunc(&label(&st), w), w = w),
                     },
                     if selected { base } else { Style::default().fg(tone) },
                 ),
@@ -223,7 +238,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::app::App;
-    use super::{label, Activity, ClaudeSession, SessionState};
+    use super::{label, tone, Activity, ClaudeSession, SessionState};
 
     fn draw(w: u16, h: u16) -> Vec<String> {
         draw_app(&App::demo(), w, h)
@@ -272,10 +287,10 @@ mod tests {
                 title: None,
                 jumpable: false,
                 tty: Some("ttys001".into()),
-                state: SessionState::default(),
-                about: Default::default(),
+                facts: Default::default(),
+                record: None,
             },
-            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()), state: SessionState::default(), about: Default::default() },
+            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()), facts: Default::default(), record: None },
         ];
         let out = draw_app(&app, 40, 8).join("\n");
         assert!(!out.contains("ttys001"), "no collisions, so no tty column:\n{out}");
@@ -312,9 +327,7 @@ mod tests {
         assert_eq!(
             label(&SessionState {
                 activity: Activity::Loop { wakes_in: Duration::from_secs(260) },
-                subagents: Vec::new(),
-                shell: None,
-                writing_age: None,
+                subagents: 0,
                 warn: true
             }),
             "loop 4m"
@@ -322,9 +335,7 @@ mod tests {
         assert_eq!(
             label(&SessionState {
                 activity: Activity::Loop { wakes_in: Duration::from_secs(40) },
-                subagents: Vec::new(),
-                shell: None,
-                writing_age: None,
+                subagents: 0,
                 warn: true
             }),
             "loop 40s"
@@ -337,9 +348,7 @@ mod tests {
         // same number after a fortnight is the whole message.
         let fresh = SessionState {
             activity: Activity::Idle { since: Some(Duration::from_secs(90)) },
-            subagents: Vec::new(),
-            shell: None,
-            writing_age: None,
+            subagents: 0,
             warn: false,
         };
         assert_eq!(label(&fresh), "idle");
@@ -354,7 +363,7 @@ mod tests {
         let mut app = App::demo();
         let slow = app.slow.as_mut().expect("demo() ingests a slow snapshot");
         for s in slow.sessions.iter_mut() {
-            s.state = SessionState::default();
+            s.facts = Default::default();
         }
         let out = draw_app(&app, 160, 8).join("\n");
         for word in ["busy", "loop", "idle", "bg job"] {
@@ -370,6 +379,30 @@ mod tests {
         let out = draw(36, 8).join("\n");
         assert!(out.contains('◐'), "the shape must survive any width:\n{out}");
         assert!(!out.contains("bg job"), "the word should have given up its columns:\n{out}");
+    }
+
+    #[test]
+    fn one_rule_decides_what_colour_a_session_is() {
+        // There used to be three copies of this and they disagreed: the card
+        // dimmed an idle session, the grouped card did not, and the dialog had
+        // no busy branch at all.
+        let th = crate::ui::theme::Theme::dark();
+        let idle = SessionState {
+            activity: Activity::Idle { since: None },
+            ..SessionState::default()
+        };
+        let busy = SessionState { activity: Activity::Busy, ..SessionState::default() };
+        let looping = SessionState {
+            activity: Activity::Loop { wakes_in: Duration::from_secs(60) },
+            warn: true,
+            ..SessionState::default()
+        };
+        assert_eq!(tone(&idle, &th), th.dim, "waiting for you is quiet");
+        assert_eq!(tone(&busy, &th), th.accent, "working is the accent");
+        assert_eq!(tone(&looping, &th), th.amber, "running without you is amber");
+        // Warn wins over everything, including busy.
+        let stalled = SessionState { activity: Activity::Busy, warn: true, ..SessionState::default() };
+        assert_eq!(tone(&stalled, &th), th.amber);
     }
 
     #[test]
