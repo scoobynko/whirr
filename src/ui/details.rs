@@ -41,6 +41,9 @@ fn state_line(st: &SessionState, facts: &ActivityFacts, now: SystemTime) -> Stri
             format!("loop · wakes in {}", fmt_duration(wakes_in.as_secs()))
         }
         Activity::BgJob => "bg job · waiting on a shell".into(),
+        Activity::Scheduled { last_fire } => {
+            format!("scheduled · last ran {} ago", fmt_duration(last_fire.as_secs()))
+        }
         Activity::Idle { since } => match since {
             Some(d) => format!("idle · {}", fmt_duration(d.as_secs())),
             None => "idle".into(),
@@ -187,6 +190,9 @@ mod tests {
         assert!(text(&demo(1))[0].contains("loop · wakes in 4m"));
         assert!(text(&demo(2))[0].contains("idle · 1m"));
         assert!(text(&demo(3))[0].contains("bg job"));
+        // The card has room for "scheduled" and nothing else; here there is
+        // room to say when it last happened, which is the only fact there is.
+        assert!(text(&demo(4))[0].contains("scheduled · last ran 30m ago"));
     }
 
     #[test]

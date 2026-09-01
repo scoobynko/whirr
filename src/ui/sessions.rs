@@ -28,7 +28,7 @@ use crate::sampler::sessions::ClaudeSession;
 pub fn glyph(a: &Activity) -> &'static str {
     match a {
         Activity::Busy => "●",
-        Activity::Loop { .. } | Activity::BgJob => "◐",
+        Activity::Loop { .. } | Activity::BgJob | Activity::Scheduled { .. } => "◐",
         Activity::Idle { .. } => "○",
         Activity::Unknown => "·",
     }
@@ -70,6 +70,9 @@ pub fn label(st: &SessionState) -> String {
         Activity::Busy => "busy".into(),
         Activity::Loop { wakes_in } => format!("loop {}", brief(*wakes_in)),
         Activity::BgJob => "bg job".into(),
+        // No countdown, because nothing on disk says when the next one is.
+        // The word alone is the warning: this session wakes without you.
+        Activity::Scheduled { .. } => "scheduled".into(),
         // How long only matters once it is long enough to be a surprise;
         // until then it is a number that changes every second and says
         // nothing.
@@ -109,8 +112,9 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // first so a long project name cannot push them off the edge.
     const TTY_W: usize = 8;
     const CPU_W: usize = 6;
-    // "loop 40s" and "idle 14d" are the longest things the column ever says.
-    const STATE_W: usize = 8;
+    // "scheduled" is the longest thing the column ever says, one wider than
+    // "loop 40s" and "idle 14d".
+    const STATE_W: usize = 9;
     // The glyph and the space after it. Unlike the words, this is never
     // dropped: it is two columns, and it is the whole point of the card.
     const GLYPH_W: usize = 2;
@@ -238,7 +242,7 @@ mod tests {
     use std::time::Duration;
 
     use crate::app::App;
-    use super::{label, tone, Activity, ClaudeSession, SessionState};
+    use super::{glyph, label, tone, Activity, ClaudeSession, SessionState};
 
     fn draw(w: u16, h: u16) -> Vec<String> {
         draw_app(&App::demo(), w, h)
@@ -312,12 +316,27 @@ mod tests {
     fn every_state_says_what_it_is() {
         let out = draw(160, 8).join("\n");
         // One demo session per state, so this covers the whole vocabulary.
-        for word in ["busy ×2", "loop 4m", "idle", "bg job"] {
+        for word in ["busy ×2", "loop 4m", "idle", "bg job", "scheduled"] {
             assert!(out.contains(word), "state {word:?} missing:\n{out}");
         }
         for shape in ['●', '◐', '○'] {
             assert!(out.contains(shape), "glyph {shape:?} missing:\n{out}");
         }
+    }
+
+    #[test]
+    fn a_scheduled_session_says_so_instead_of_saying_idle() {
+        // A cron or a `/schedule` wakes the session and spends tokens with
+        // nobody watching. Nothing on disk says when the next one lands, so
+        // there is no countdown to show and none is invented.
+        let st = SessionState {
+            activity: Activity::Scheduled { last_fire: Duration::from_secs(1800) },
+            warn: true,
+            ..SessionState::default()
+        };
+        assert_eq!(label(&st), "scheduled");
+        assert_eq!(glyph(&st.activity), glyph(&Activity::BgJob), "same shape as the others");
+        assert_eq!(tone(&st, &crate::ui::theme::Theme::dark()), crate::ui::theme::Theme::dark().amber);
     }
 
     #[test]

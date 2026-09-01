@@ -395,6 +395,12 @@ impl App {
                     shells: vec!["CI=true pnpm test".into()],
                     ..Default::default()
                 }),
+                Self::demo_session(605, "welchost", None, Some("ttys031"), 90_000, ActivityFacts {
+                    status: Some(Status::Idle),
+                    status_since: Some(Self::ago(1_800)),
+                    last_scheduled_fire: Some(Self::ago(1_800)),
+                    ..Default::default()
+                }),
             ],
             stale: false,
         }));
@@ -1292,10 +1298,10 @@ mod tests {
     #[test]
     fn each_card_reports_its_own_row_count() {
         let a = App::demo();
-        // demo(): 2 localhost rows, 1 other row, 4 sessions.
+        // demo(): 2 localhost rows, 1 other row, 5 sessions.
         assert_eq!(a.localhost_rows().len(), 2);
         assert_eq!(a.other_rows().len(), 1);
-        assert_eq!(a.sessions().len(), 4);
+        assert_eq!(a.sessions().len(), 5);
     }
 
     #[test]
@@ -1319,7 +1325,7 @@ mod tests {
     fn a_cursor_is_clamped_to_its_own_panels_length() {
         // Panels are different lengths; a cursor parked past the end of a
         // shorter one must read as that panel's last row, not out of range.
-        let mut a = App::demo(); // 5 processes, 2 localhost rows, 4 sessions
+        let mut a = App::demo(); // 5 processes, 2 localhost rows, 5 sessions
         for _ in 0..9 {
             a.on_key(KeyEvent::from(KeyCode::Down));
         }

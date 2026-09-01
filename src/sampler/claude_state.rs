@@ -71,6 +71,10 @@ pub enum Activity {
     /// Quiet, but it has armed its own wakeup: it will start again with
     /// nobody at the keyboard.
     Loop { wakes_in: Duration },
+    /// Quiet, but it takes scheduled work: a cron or a `/schedule` has woken
+    /// it before and can wake it again. Sibling of `Loop` without the
+    /// countdown, because nothing on disk says when the next one lands.
+    Scheduled { last_fire: Duration },
     /// Quiet, but a shell it started is still running.
     BgJob,
     /// Waiting for a human. `since` is how long, when that is knowable.
@@ -103,6 +107,8 @@ pub struct ActivityFacts {
     /// When anything was last written to the session's transcript. This is the
     /// heartbeat of a session that is working.
     pub last_write: Option<SystemTime>,
+    /// When a scheduled task last woke this session, if one ever has.
+    pub last_scheduled_fire: Option<SystemTime>,
 }
 
 /// What the facts add up to. Derived on demand and never stored: every field
@@ -146,6 +152,12 @@ pub fn state(f: &ActivityFacts, now: SystemTime) -> SessionState {
         Activity::Loop { wakes_in: w }
     } else if !f.shells.is_empty() {
         Activity::BgJob
+    } else if let Some(d) = since(f.last_scheduled_fire) {
+        // Below a background job, which is happening now, and above idle,
+        // which is what this would otherwise read as: a session that takes
+        // scheduled work spends tokens with nobody watching, and saying
+        // "idle" about it is the one answer that helps least.
+        Activity::Scheduled { last_fire: d }
     } else if f.status == Some(Status::Idle) {
         Activity::Idle { since: status_age }
     } else {
@@ -158,7 +170,7 @@ pub fn state(f: &ActivityFacts, now: SystemTime) -> SessionState {
         // stall from missing evidence would cry wolf on every session whirr
         // cannot follow.
         Activity::Busy => f.shells.is_empty() && writing_age.is_some_and(|d| d >= STALLED),
-        Activity::Loop { .. } | Activity::BgJob => true,
+        Activity::Loop { .. } | Activity::BgJob | Activity::Scheduled { .. } => true,
         Activity::Idle { since } => since.is_some_and(|d| d >= FORGOTTEN),
         Activity::Unknown => false,
     };
@@ -329,6 +341,32 @@ pub fn armed_wake_at(tail: &str, grew_until: SystemTime) -> Option<SystemTime> {
         return None;
     }
     Some(at + Duration::from_secs(delay))
+}
+
+/// When a scheduled task last woke this session, read out of the tail.
+///
+/// `/schedule` and a cron `/loop` both land here: Claude Code writes a
+/// `scheduled_task_fire` record into the session's own transcript when one
+/// fires, so the work happens on this machine and can be seen. What is not
+/// written anywhere is the schedule itself, so there is no next-fire time to
+/// count down to and none is invented.
+///
+/// The record is matched by parsing, not by looking for the name in the line.
+/// A transcript quotes itself constantly — a grep for this very string finds
+/// tool output discussing it — and a substring match reads those as fires.
+pub fn last_scheduled_fire(tail: &str) -> Option<SystemTime> {
+    tail.lines()
+        .rev()
+        .filter(|l| l.contains("scheduled_task_fire"))
+        .find_map(|line| {
+            let v: serde_json::Value = serde_json::from_str(line).ok()?;
+            if v.get("type")?.as_str()? != "system"
+                || v.get("subtype")?.as_str()? != "scheduled_task_fire"
+            {
+                return None;
+            }
+            Some(UNIX_EPOCH + Duration::from_secs(epoch_secs(v.get("timestamp")?.as_str()?)?))
+        })
 }
 
 /// One transcript line, as `(logged at, delay in seconds)`. A `None` delay is
@@ -661,6 +699,67 @@ mod tests {
             armed_wake_at(&tail, at(T_SECS + 30)).is_some(),
             "the tool result written just after the call must not count as growth"
         );
+    }
+
+    /// The record Claude Code writes when a `/schedule` or a cron `/loop`
+    /// wakes a session.
+    fn fire_line(iso: &str) -> String {
+        format!(
+            r#"{{"type":"system","subtype":"scheduled_task_fire","timestamp":"{iso}",
+               "content":"Running scheduled task (Sep 1 2:47pm)"}}"#
+        )
+        .replace('\n', "")
+    }
+
+    #[test]
+    fn a_scheduled_fire_is_found_and_the_latest_one_wins() {
+        let tail = format!("{}\n{}\n", fire_line("2026-09-01T08:00:00.000Z"), fire_line(T));
+        assert_eq!(last_scheduled_fire(&tail), Some(at(T_SECS)));
+    }
+
+    #[test]
+    fn a_transcript_talking_about_scheduled_tasks_has_not_run_one() {
+        // This is not hypothetical. A grep for the name across real
+        // transcripts "found" four fires in a session that had run none: the
+        // matches were its own tool output discussing the record. The parser
+        // has to read the record, not the line it sits in.
+        let quoting = [
+            r#"{"type":"user","timestamp":"2026-09-01T08:57:30.000Z","message":{"content":"grep scheduled_task_fire"}}"#.to_string(),
+            r#"{"type":"assistant","timestamp":"2026-09-01T08:57:30.000Z","message":{"content":[{"type":"text","text":"subtype scheduled_task_fire"}]}}"#.to_string(),
+            fire_line(T).replace("\"system\"", "\"assistant\""),
+            "not json at all, but it mentions scheduled_task_fire".to_string(),
+        ];
+        for line in quoting {
+            assert_eq!(last_scheduled_fire(&line), None, "read as a fire: {line}");
+        }
+    }
+
+    #[test]
+    fn a_session_that_takes_scheduled_work_does_not_read_as_idle() {
+        // The whole point: a session wired to a cron spends tokens with nobody
+        // watching, and "idle" is the one answer that helps least.
+        let f = ActivityFacts { last_scheduled_fire: Some(ago(3600)), ..facts() };
+        let st = derived(&f);
+        assert_eq!(st.activity, Activity::Scheduled { last_fire: Duration::from_secs(3600) });
+        assert!(st.warn, "it will wake without you");
+    }
+
+    #[test]
+    fn work_happening_now_outranks_a_schedule() {
+        // Busy, a loop and a live shell are all happening; a schedule is a
+        // thing that will happen. The nearer fact wins the column.
+        for nearer in [
+            ActivityFacts { status: Some(Status::Busy), ..facts() },
+            ActivityFacts { wake_at: Some(ahead(60)), ..facts() },
+            ActivityFacts { shells: vec!["pnpm test".into()], ..facts() },
+        ] {
+            let f = ActivityFacts { last_scheduled_fire: Some(ago(3600)), ..nearer };
+            assert!(
+                !matches!(derived(&f).activity, Activity::Scheduled { .. }),
+                "{:?} should outrank a schedule",
+                derived(&f).activity
+            );
+        }
     }
 
     #[test]

@@ -62,7 +62,8 @@ doing next to it.
 Filled circle is working. Half filled is running with nobody watching. Hollow
 is waiting for you. The word says which. `busy ×2` counts subagents, `loop 4m`
 counts down to a wakeup the session set for itself, `bg job` is a shell that
-outlived its turn, `idle 14d` is one you forgot about.
+outlived its turn, `scheduled` is one a cron or a `/schedule` wakes up,
+`idle 14d` is one you forgot about.
 
 Amber means it is running without you. That is the whole point of the card.
 
@@ -77,8 +78,8 @@ the default one.
 background shell is running, the full path, the account, how long it has been
 open.
 
-One gap. `/loop 5m` is scheduled server side and leaves nothing on disk, so
-whirr cannot see it coming. A self paced `/loop` it can.
+No countdown on `scheduled`, though. The schedule itself lives on the server,
+so whirr can tell you it happens. Not when.
 
 ## Performance
 

@@ -159,11 +159,17 @@ fn read_tail(path: &Path, bytes: u64) -> Option<String> {
 /// either at the end or absent.
 const TAIL: u64 = 64 * 1024;
 
-/// When this session's armed wakeup will fire, if it has one armed.
-fn pending_wake(transcript: &Path) -> Option<SystemTime> {
-    let grew_until = std::fs::metadata(transcript).and_then(|m| m.modified()).ok()?;
-    let tail = read_tail(transcript, TAIL)?;
-    claude_state::armed_wake_at(&tail, grew_until)
+/// What the tail of a transcript says about work the session will do on its
+/// own: an armed wakeup, and the last scheduled task to have woken it.
+///
+/// One read serving both. They are found by different parsers but live in the
+/// same few kilobytes, and reading the file twice to ask two questions of it
+/// would be the expensive half of this tick done twice.
+fn unattended(transcript: &Path) -> (Option<SystemTime>, Option<SystemTime>) {
+    let Some(tail) = read_tail(transcript, TAIL) else { return (None, None) };
+    let grew_until = std::fs::metadata(transcript).and_then(|m| m.modified()).ok();
+    let wake = grew_until.and_then(|t| claude_state::armed_wake_at(&tail, t));
+    (wake, claude_state::last_scheduled_fire(&tail))
 }
 
 /// Attach what each session is doing: busy, looping, running a background
@@ -172,7 +178,11 @@ fn pending_wake(transcript: &Path) -> Option<SystemTime> {
 /// A session whose state cannot be read keeps `Unknown` and stays on the card.
 /// Losing a row because its config root moved would be a worse failure than
 /// showing it without a state — the row is still a session you can jump to.
-fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32, i32>) {
+fn attach_state(
+    sessions: &mut [sessions::ClaudeSession],
+    parents: &HashMap<i32, i32>,
+    scheduled: &mut HashMap<String, SystemTime>,
+) {
     if sessions.is_empty() {
         return;
     }
@@ -223,8 +233,18 @@ fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32,
             // session actively writing to its transcript is exactly the one
             // that never pays for it.
             if rec.status != Some(claude_state::Status::Busy) {
-                s.facts.wake_at = pending_wake(&transcript);
+                let (wake, fired) = unattended(&transcript);
+                s.facts.wake_at = wake;
+                // Remembered rather than re-read each tick. The fire record is
+                // written at the *start* of a turn, so a long one pushes it out
+                // of the tail and the session would go back to reading "idle",
+                // which is the one thing a session that wakes on a schedule is
+                // not.
+                if let Some(t) = fired {
+                    scheduled.insert(rec.session_id.clone(), t);
+                }
             }
+            s.facts.last_scheduled_fire = scheduled.get(&rec.session_id).copied();
         }
         s.record = Some(rec.clone());
     }
@@ -349,6 +369,9 @@ fn scan_ports() -> Option<Vec<PortRow>> {
 
 pub fn run(tx: Sender<Snapshot>) {
     let mut last_good: Vec<PortRow> = Vec::new();
+    // Sessions seen taking a scheduled task, by session id. See `attach_state`
+    // for why this is remembered rather than read fresh every tick.
+    let mut scheduled: HashMap<String, SystemTime> = HashMap::new();
     loop {
         // Ports and sessions are independent sources: sessions come from a
         // full pid walk that never consults lsof. Scanning them separately is
@@ -359,7 +382,7 @@ pub fn run(tx: Sender<Snapshot>) {
         // the terminal, the state lookup walks them down to the shells.
         let parents = crate::host::parent_map();
         attach_titles(&mut sessions, &parents);
-        attach_state(&mut sessions, &parents);
+        attach_state(&mut sessions, &parents, &mut scheduled);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
@@ -514,7 +537,7 @@ mod live {
     fn show_this_machines_sessions() {
         let mut sessions = super::scan_sessions();
         let parents = crate::host::parent_map();
-        super::attach_state(&mut sessions, &parents);
+        super::attach_state(&mut sessions, &parents, &mut Default::default());
         let now = std::time::SystemTime::now();
         for s in &sessions {
             let st = super::claude_state::state(&s.facts, now);
@@ -546,6 +569,32 @@ mod live {
             }
         }
         println!("parsed {seen} real subagent records");
+        // And every transcript on this machine, to check the fire parser
+        // against the real records and, more usefully, the real near-misses:
+        // a transcript quotes the record's name constantly, so the count of
+        // mentions is nothing like the count of fires.
+        let (mut fired, mut files, mut mentioned) = (0, 0, 0);
+        for root in super::config_roots(std::path::Path::new(&home)) {
+            for project in std::fs::read_dir(root.join("projects")).into_iter().flatten().flatten() {
+                for f in std::fs::read_dir(project.path()).into_iter().flatten().flatten() {
+                    let path = f.path();
+                    if path.extension().is_none_or(|e| e != "jsonl") {
+                        continue;
+                    }
+                    files += 1;
+                    let text = std::fs::read_to_string(&path).unwrap_or_default();
+                    let hits = text.matches("scheduled_task_fire").count();
+                    mentioned += hits;
+                    if super::claude_state::last_scheduled_fire(&text).is_some() {
+                        fired += 1;
+                    }
+                }
+            }
+        }
+        println!(
+            "{fired} of {files} transcripts ran a scheduled task; \
+             {mentioned} lines mention one"
+        );
     }
 
     /// Every `*.meta.json` under a projects tree.
