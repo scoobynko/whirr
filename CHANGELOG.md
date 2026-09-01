@@ -6,6 +6,31 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+## v0.3.11
+
+_2026-09-01 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.10...v0.3.11)_
+
+
+### Added
+
+- Show what each Claude session is doing ([366caf8](https://github.com/scoobynko/whirr/commit/366caf8134627f06811f310d5c6c755671845a23))
+- D opens session details ([37b0cdf](https://github.com/scoobynko/whirr/commit/37b0cdfcbaadbfbfca34b8852b5fa0b6e84012f9))
+- Mark sessions that a schedule wakes up ([3447250](https://github.com/scoobynko/whirr/commit/3447250dcf60a71173228873448c876d03aba3be))
+
+### Changed
+
+- One tone rule, one copy of the facts ([befc797](https://github.com/scoobynko/whirr/commit/befc797f466a87362e8bde5edc260dc4ebb267f7))
+- One dialog, not four flags ([e27768c](https://github.com/scoobynko/whirr/commit/e27768c9dc04aa09457c08aaba54485de7a85bdd))
+
+### Documentation
+
+- The sessions card, in the README's own voice ([430d4b7](https://github.com/scoobynko/whirr/commit/430d4b754094a364b809493942c2fb734b0fd01b))
+
+### Fixed
+
+- Judge a stalled session by its transcript, not its status age ([27b43d5](https://github.com/scoobynko/whirr/commit/27b43d5f6038dedc0f6fec725e2ef9a46c25925a))
+- Unwrap a background shell whose command reads stdin ([5f8947d](https://github.com/scoobynko/whirr/commit/5f8947de941337c5055789fff795d9f3f3ae19f6))
+- Read the cron, not the fire ([39cbe14](https://github.com/scoobynko/whirr/commit/39cbe14d2a03f269581d0ac4cdd74fec5c19be10))
 ## v0.3.10
 
 _2026-08-10 · [compare](https://github.com/scoobynko/whirr/compare/v0.3.9...v0.3.10)_
