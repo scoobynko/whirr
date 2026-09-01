@@ -117,6 +117,12 @@ fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32,
                 // other.
                 let dir = transcript.with_extension("").join("subagents");
                 facts.subagents = claude_state::hot_subagents(&dir, now);
+                // The heartbeat of a working session. One stat, and the only
+                // thing that separates a long turn from a hung one.
+                facts.writing_age = std::fs::metadata(&transcript)
+                    .and_then(|m| m.modified())
+                    .ok()
+                    .and_then(|t| now.duration_since(t).ok());
                 // Only a quiet session can be waiting on a wakeup, and this
                 // is the one read in the tick that touches a large file — so
                 // the session actively writing to its transcript is exactly

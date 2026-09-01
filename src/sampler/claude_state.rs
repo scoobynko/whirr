@@ -21,10 +21,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-/// A busy flag older than this is not a session working hard, it is a session
-/// that died mid-turn. Claude Code rewrites `statusUpdatedAt` on every
-/// transition, and no single turn stays busy this long.
-const STUCK: Duration = Duration::from_secs(30 * 60);
+/// A session flagged busy whose transcript has not been touched this long has
+/// stopped working without saying so.
+///
+/// Deliberately not measured from `statusUpdatedAt`: that is written once when
+/// the turn begins and not again until it ends, so any threshold on it flags a
+/// long agentic run as stuck. A session that is genuinely working writes to
+/// its transcript every few seconds; one that hung froze at the moment it did.
+///
+/// The one thing that writes nothing while working is a long shell call, which
+/// is why `state` also requires that no shell is running before it says a word.
+const STALLED: Duration = Duration::from_secs(15 * 60);
 
 /// Idle this long is a session you have forgotten about. It costs nothing in
 /// itself, but it is holding its MCP servers and language servers open.
@@ -81,6 +88,9 @@ pub struct ActivityFacts {
     pub subagents: usize,
     /// Time until an armed wakeup fires, when one is armed.
     pub wakes_in: Option<Duration>,
+    /// How long since anything was written to the session's transcript. This
+    /// is the heartbeat of a session that is working.
+    pub writing_age: Option<Duration>,
 }
 
 /// A session's activity and whether it is worth pulling the eye to.
@@ -120,9 +130,11 @@ pub fn state(f: &ActivityFacts) -> SessionState {
         Activity::Unknown
     };
     let warn = match &activity {
-        // Not "busy for a while" — busy for longer than any turn lasts, which
-        // means the flag outlived the process writing it.
-        Activity::Busy => f.status_age.is_some_and(|d| d >= STUCK),
+        // Busy but silent: no transcript writes and no shell to be waiting on.
+        // An unreadable transcript says nothing either way, and inventing a
+        // stall from missing evidence would cry wolf on every session whirr
+        // cannot follow.
+        Activity::Busy => f.shells == 0 && f.writing_age.is_some_and(|d| d >= STALLED),
         Activity::Loop { .. } => true,
         Activity::BgJob => true,
         Activity::Idle { since } => since.is_some_and(|d| d >= FORGOTTEN),
@@ -359,16 +371,47 @@ mod tests {
     }
 
     #[test]
-    fn a_busy_flag_older_than_any_turn_is_a_stuck_session() {
-        // Claude Code rewrites statusUpdatedAt on every transition, so a busy
-        // flag this old belongs to a process that died mid-turn.
+    fn a_busy_session_writing_nothing_has_stopped_working() {
         let f = ActivityFacts {
             status: Some(Status::Busy),
-            status_age: Some(STUCK + Duration::from_secs(1)),
+            writing_age: Some(STALLED + Duration::from_secs(1)),
             ..facts()
         };
         assert_eq!(state(&f).activity, Activity::Busy);
-        assert!(state(&f).warn, "a busy flag that outlived its turn must be flagged");
+        assert!(state(&f).warn, "a busy session with a frozen transcript must be flagged");
+    }
+
+    #[test]
+    fn a_long_turn_is_not_a_stalled_one() {
+        // The bug this rule replaces: `statusUpdatedAt` is written once when a
+        // turn begins and not again until it ends, so any threshold on it
+        // flags an agentic run that is working perfectly.
+        let f = ActivityFacts {
+            status: Some(Status::Busy),
+            status_age: Some(Duration::from_secs(4 * 60 * 60)),
+            writing_age: Some(Duration::from_secs(3)),
+            ..facts()
+        };
+        assert!(!state(&f).warn, "four hours of a turn that is still writing is fine");
+    }
+
+    #[test]
+    fn a_session_waiting_on_a_long_shell_is_not_stalled() {
+        // The one way to work while writing nothing: a test suite or a build
+        // running for minutes. The shell is the proof it is still going.
+        let f = ActivityFacts {
+            status: Some(Status::Busy),
+            shells: 1,
+            writing_age: Some(STALLED * 4),
+            ..facts()
+        };
+        assert!(!state(&f).warn, "a live shell is a session still doing something");
+    }
+
+    #[test]
+    fn a_busy_session_whose_transcript_cannot_be_read_is_not_accused() {
+        let f = ActivityFacts { status: Some(Status::Busy), writing_age: None, ..facts() };
+        assert!(!state(&f).warn, "missing evidence is not evidence of a stall");
     }
 
     #[test]
