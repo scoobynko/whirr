@@ -310,6 +310,68 @@ pub fn list_all_pids() -> Vec<i32> {
     }
 }
 
+/// The kernel's cap on how big an argument area can be. Read once: it is a
+/// boot-time constant, and a fresh `sysctl` per call would be a second syscall
+/// for a number that never moves.
+fn argmax() -> usize {
+    use std::sync::OnceLock;
+    static MAX: OnceLock<usize> = OnceLock::new();
+    *MAX.get_or_init(|| crate::mac::sysctl::sysctl_u32("kern.argmax").unwrap_or(262_144) as usize)
+}
+
+/// `pid`'s command line, joined with spaces.
+///
+/// Deliberately not part of any full-system walk: this allocates an
+/// argmax-sized buffer (256 KB by default) and copies the process's whole
+/// argument *and* environment area. It is affordable for one pid the user
+/// asked about, and nothing like affordable for 800 of them — which is why
+/// `exec_path` exists and is what the scanners use.
+///
+/// `None` means the kernel would not answer: another user's process, a pid
+/// that died between the listing and the read, or a hardened binary.
+pub fn args(pid: i32) -> Option<String> {
+    const KERN_PROCARGS2: libc::c_int = 49;
+    let mut buf = vec![0u8; argmax()];
+    let mut mib = [libc::CTL_KERN, KERN_PROCARGS2, pid];
+    let mut len = buf.len();
+    let r = unsafe {
+        libc::sysctl(
+            mib.as_mut_ptr(),
+            mib.len() as u32,
+            buf.as_mut_ptr().cast(),
+            &mut len,
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if r != 0 || len < 4 {
+        return None;
+    }
+    buf.truncate(len);
+    Some(parse_procargs2(&buf))
+}
+
+/// The argument vector inside a `KERN_PROCARGS2` blob, joined with spaces.
+///
+/// Layout: a 4-byte `argc`, the executable path, then NUL padding, then
+/// exactly `argc` NUL-terminated arguments, then the environment — which is
+/// why the count matters and a naive split on NUL would hand back the whole
+/// environment as well.
+fn parse_procargs2(buf: &[u8]) -> String {
+    let argc = u32::from_ne_bytes([buf[0], buf[1], buf[2], buf[3]]) as usize;
+    let rest = &buf[4..];
+    // The exec path comes first and is not one of the `argc` arguments; skip
+    // it, then the run of padding NULs that aligns what follows.
+    let after_path = rest.iter().position(|&b| b == 0).map_or(rest.len(), |i| i + 1);
+    let start = after_path + rest[after_path..].iter().take_while(|&&b| b == 0).count();
+    rest[start..]
+        .split(|&b| b == 0)
+        .take(argc)
+        .map(String::from_utf8_lossy)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,4 +494,33 @@ mod tests {
         assert!(pids.len() > 10, "a live macOS box has many pids, got {}", pids.len());
         assert!(pids.contains(&(std::process::id() as i32)), "own pid missing");
     }
+
+    #[test]
+    fn procargs2_takes_the_arguments_and_stops_before_the_environment() {
+        // argc, exec path, NUL padding, argc arguments, then the environment
+        // — which a naive split on NUL would hand back as arguments too.
+        let mut buf = 2u32.to_ne_bytes().to_vec();
+        buf.extend(b"/bin/zsh\0\0\0");
+        buf.extend(b"/bin/zsh\0-c\0");
+        buf.extend(b"PATH=/usr/bin\0HOME=/Users/me\0");
+        assert_eq!(super::parse_procargs2(&buf), "/bin/zsh -c");
+    }
+
+    #[test]
+    fn procargs2_of_a_process_with_no_arguments_is_empty() {
+        let mut buf = 0u32.to_ne_bytes().to_vec();
+        buf.extend(b"/bin/sleep\0\0");
+        buf.extend(b"PATH=/usr/bin\0");
+        assert_eq!(super::parse_procargs2(&buf), "");
+    }
+
+    #[test]
+    fn our_own_command_line_is_readable() {
+        // The one thing a fixture cannot prove: that the sysctl is wired up
+        // and the layout matches this kernel. The test binary's own argv
+        // always contains its path.
+        let mine = super::args(std::process::id() as i32).expect("own argv must be readable");
+        assert!(mine.contains("whirr") || mine.contains("deps"), "odd argv: {mine:?}");
+    }
+
 }

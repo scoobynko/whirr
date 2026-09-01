@@ -1,7 +1,7 @@
 use ratatui::backend::TestBackend;
 use ratatui::Terminal;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use whirr::app::{App, Focus};
+use whirr::app::{App, Dialog, Focus};
 use whirr::sampler::ProcInfo;
 use whirr::ui;
 use whirr::ui::theme::Theme;
@@ -461,7 +461,7 @@ fn demo_pending_kill(focus: Focus) -> App {
     let mut app = demo_with_focus(focus);
     app.select(0);
     app.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-    assert!(app.pending_kill.is_some(), "{focus:?} row should be killable");
+    assert!(matches!(app.dialog, Some(Dialog::Kill { .. })), "{focus:?} row should be killable");
     app
 }
 
@@ -529,7 +529,7 @@ fn a_pathological_target_name_cannot_stretch_the_dialog_across_the_screen() {
     let f = app.fast.as_mut().expect("demo() ingests a fast snapshot");
     f.processes[0].name = "x".repeat(300);
     app.on_key(KeyEvent::new(KeyCode::Char('k'), KeyModifiers::NONE));
-    assert!(app.pending_kill.is_some());
+    assert!(matches!(app.dialog, Some(Dialog::Kill { .. })));
 
     // Measure the box off its own top border: from the corner that opens the
     // titled row to the corner that closes it.
@@ -564,7 +564,7 @@ fn demo_pending_port_pick() -> App {
     let mut app = demo_with_focus(Focus::Localhost);
     app.select(0); // glassbook-frontend: 4206, 6006, 63643
     app.on_key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE));
-    assert!(app.pending_port_pick.is_some(), "a multi-port row should ask");
+    assert!(matches!(app.dialog, Some(Dialog::PortPick(_))), "a multi-port row should ask");
     app
 }
 
@@ -617,7 +617,7 @@ fn the_port_picker_renders_at_every_size_without_panicking() {
 fn demo_settings_open() -> App {
     let mut app = App::demo();
     app.on_key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::NONE));
-    assert!(app.settings_open);
+    assert!(matches!(app.dialog, Some(Dialog::Settings { .. })));
     app
 }
 
@@ -791,10 +791,15 @@ fn a_titled_session_shows_the_project_as_well_as_the_title() {
     // The title says what the session is doing; the project says which
     // codebase it is doing it in. Two sessions can easily be doing similar
     // things in different repos, so neither replaces the other.
+    //
+    // The title is the column that gives ground when the state column wants
+    // room, and it is the right one to take from: it is already truncated at
+    // most widths, and losing the end of a sentence costs less than not
+    // knowing the session is looping.
     let g = draw_grid_app(&App::demo(), 160, 45);
     let row = g
         .iter()
-        .find(|l| l.contains("Fix the port picker"))
+        .find(|l| l.contains("Fix the"))
         .expect("the host's own title should be shown");
     assert!(row.contains("whirr"), "the project should still be on the row: {row:?}");
 }
@@ -1003,4 +1008,33 @@ fn two_by_two_grid_falls_back_below_either_floor() {
         let lines = draw_grid_app(&app, w, h);
         assert_eq!(row_of(&lines, "CPU"), 5, "{w}x{h} ({why}): compact header is 5 rows, so gauges start at row 5");
     }
+}
+
+#[test]
+fn the_footer_offers_details_on_the_sessions_card_only() {
+    // Unlike `o`, this needs nothing of the terminal host, so it is offered
+    // for every session row rather than only the reachable ones.
+    let c = draw_app_at(&demo_with_focus(Focus::Sessions), 120, 40);
+    assert!(c.contains("d details"), "sessions should offer it");
+    for focus in [Focus::Processes, Focus::Localhost, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(!c.contains("d details"), "{focus:?} has no session to describe");
+    }
+}
+
+#[test]
+fn the_details_dialog_draws_over_the_whole_frame() {
+    // Like the kill confirmation before it: raised from the sessions card but
+    // drawn over everything, not inside the panel it came from.
+    let mut app = App::demo();
+    app.focus = Focus::Sessions;
+    app.select(3);
+    app.on_key(KeyEvent::from(KeyCode::Char('d')));
+    let g = draw_grid_app(&app, 120, 40);
+    let joined = g.join("\n");
+    assert!(joined.contains("bg job"), "the state should be spelled out:\n{joined}");
+    assert!(joined.contains("CI=true pnpm test"), "the command is the point:\n{joined}");
+    // The dialog's own key legend replaces the global one while it is up.
+    assert!(joined.contains("esc close"), "footer should be the dialog's:\n{joined}");
+    assert!(!joined.contains("q quit"), "global keys are inert behind it:\n{joined}");
 }

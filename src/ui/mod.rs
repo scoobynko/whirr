@@ -3,8 +3,9 @@ pub mod cpu;
 pub mod font;
 pub mod gauge;
 pub mod header;
+pub mod details;
 pub mod memory;
-pub mod modal;
+mod modal;
 pub mod network;
 pub mod ports;
 pub mod power;
@@ -20,7 +21,7 @@ pub mod theme;
 use ratatui::prelude::*;
 use ratatui::widgets::{Block, Paragraph};
 
-use crate::app::{App, Focus};
+use crate::app::{App, Dialog, Focus};
 use screen::{Body, Gauge, Screen, Tier};
 
 /// Draw one frame.
@@ -71,13 +72,34 @@ pub fn draw(f: &mut Frame, app: &App) {
     // Last, over everything, and over the *whole* frame rather than the panel
     // the target came from — a confirmation raised on the localhost card used
     // to appear inside the Processes box two panels away.
-    if app.settings_open {
-        render_settings(f, area, app);
-    } else if let Some((pid, name)) = &app.pending_kill {
-        render_kill_dialog(f, area, &app.theme, *pid, name);
-    } else if let Some(pick) = &app.pending_port_pick {
-        render_port_picker(f, area, &app.theme, pick);
+    match &app.dialog {
+        None => {}
+        Some(Dialog::Settings { row }) => render_settings(f, area, app, *row),
+        Some(Dialog::Details) => render_session_details(f, area, app),
+        Some(Dialog::Kill { pid, name }) => render_kill_dialog(f, area, &app.theme, *pid, name),
+        Some(Dialog::PortPick(pick)) => render_port_picker(f, area, &app.theme, pick),
     }
+}
+
+/// The details dialog for the selected session.
+///
+/// Reads the session out of the live snapshot on every frame rather than
+/// copying it when the key was pressed, so a countdown keeps counting and a
+/// subagent that finishes disappears while the dialog is open.
+fn render_session_details(f: &mut Frame, area: Rect, app: &App) {
+    let Some(s) = app.sessions().get(app.selected()) else { return };
+    let now = std::time::SystemTime::now();
+    let lines = details::lines(s, &app.theme, app.cpu_of(s.pid), app.mem_of(s.pid), now);
+    // How alarming the box looks is the caller's call, and a dialog border is
+    // a different question from what colour a state word is — an idle session
+    // still gets a readable border rather than a dim one.
+    let accent = match crate::sampler::claude_state::state(&s.facts, now).warn {
+        true => app.theme.amber,
+        false => app.theme.accent,
+    };
+    // Left, not centred: every line here has a label gutter, and centring
+    // each one on its own width makes that gutter zigzag.
+    modal::render(f, area, &app.theme, details::title(s), lines, accent, Alignment::Left);
 }
 
 /// The settings dialog: one row per choice, current value on the right.
@@ -85,7 +107,7 @@ pub fn draw(f: &mut Frame, app: &App) {
 /// Changes apply as you make them rather than on a confirm step — the whole
 /// argument for a dialog over a config file is seeing the palette while you
 /// are choosing it.
-fn render_settings(f: &mut Frame, area: Rect, app: &App) {
+fn render_settings(f: &mut Frame, area: Rect, app: &App, row: usize) {
     let t = &app.theme;
     let rows: [(&str, String); App::SETTINGS_ROWS] = [
         ("theme", app.settings.palette.label().to_string()),
@@ -111,7 +133,7 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
         .iter()
         .enumerate()
         .map(|(i, (label, value))| {
-            let selected = i == app.settings_row;
+            let selected = i == row;
             // An inert row is dimmed even under the cursor: the cursor says
             // "here", the colour says "nothing to change".
             let locked = i == 2 && !app.settings.terminal_bg_available();
@@ -133,7 +155,7 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    modal::render(f, area, t, "settings", lines, t.accent);
+    modal::render(f, area, t, "settings", lines, t.accent, Alignment::Center);
 }
 
 /// "Which of this row's ports did you mean?" — asked only when the row offers
@@ -158,7 +180,7 @@ fn render_port_picker(f: &mut Frame, area: Rect, theme: &theme::Theme, pick: &cr
         Span::styled("n", Style::default().fg(theme.text).bold()),
         Span::styled(" cancel", Style::default().fg(theme.dim)),
     ]));
-    modal::render(f, area, theme, "open which port?", lines, theme.accent);
+    modal::render(f, area, theme, "open which port?", lines, theme.accent, Alignment::Center);
 }
 
 /// "You are about to send SIGTERM to this" — the one irreversible thing whirr
@@ -177,7 +199,7 @@ fn render_kill_dialog(f: &mut Frame, area: Rect, theme: &theme::Theme, pid: i32,
             Span::styled(" cancel", Style::default().fg(theme.text)),
         ]),
     ];
-    modal::render(f, area, theme, "confirm kill", lines, theme.red);
+    modal::render(f, area, theme, "confirm kill", lines, theme.red, Alignment::Center);
 }
 
 /// One column of gutter either side of everything.
@@ -303,39 +325,37 @@ fn beside_network(f: &mut Frame, area: Rect, app: &App, screen: &Screen) -> Rect
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     // While a dialog is up every other key is inert, so advertising them
     // would be a lie. The footer becomes the dialog's own key legend.
-    if app.pending_kill.is_some() {
-        let text = Line::from(vec![
-            Span::styled("y", Style::default().fg(app.theme.red).bold()),
-            Span::styled(" confirm · ", Style::default().fg(app.theme.dim)),
-            Span::styled("n", Style::default().fg(app.theme.text).bold()),
-            Span::styled(" cancel", Style::default().fg(app.theme.dim)),
-        ]);
-        f.render_widget(Paragraph::new(text), area);
-        return;
-    }
-    if app.settings_open {
-        let text = Line::from(vec![
-            Span::styled("↑↓", Style::default().fg(app.theme.accent).bold()),
-            Span::styled(" row · ", Style::default().fg(app.theme.dim)),
-            Span::styled("←→", Style::default().fg(app.theme.accent).bold()),
-            Span::styled(" change · ", Style::default().fg(app.theme.dim)),
-            Span::styled("esc", Style::default().fg(app.theme.text).bold()),
-            Span::styled(" close", Style::default().fg(app.theme.dim)),
-        ]);
-        f.render_widget(Paragraph::new(text), area);
-        return;
-    }
-    if let Some(pick) = &app.pending_port_pick {
-        let text = Line::from(vec![
+    let key = |k: &'static str, c: Color| Span::styled(k, Style::default().fg(c).bold());
+    let says = |t: &'static str| Span::styled(t, Style::default().fg(app.theme.dim));
+    let legend: Option<Vec<Span>> = match &app.dialog {
+        None => None,
+        Some(Dialog::Kill { .. }) => Some(vec![
+            key("y", app.theme.red),
+            says(" confirm · "),
+            key("n", app.theme.text),
+            says(" cancel"),
+        ]),
+        Some(Dialog::Details) => Some(vec![key("esc", app.theme.text), says(" close")]),
+        Some(Dialog::Settings { .. }) => Some(vec![
+            key("↑↓", app.theme.accent),
+            says(" row · "),
+            key("←→", app.theme.accent),
+            says(" change · "),
+            key("esc", app.theme.text),
+            says(" close"),
+        ]),
+        Some(Dialog::PortPick(pick)) => Some(vec![
             Span::styled(
                 format!("1-{}", pick.ports.len()),
                 Style::default().fg(app.theme.accent).bold(),
             ),
-            Span::styled(" open · ", Style::default().fg(app.theme.dim)),
-            Span::styled("n", Style::default().fg(app.theme.text).bold()),
-            Span::styled(" cancel", Style::default().fg(app.theme.dim)),
-        ]);
-        f.render_widget(Paragraph::new(text), area);
+            says(" open · "),
+            key("n", app.theme.text),
+            says(" cancel"),
+        ]),
+    };
+    if let Some(spans) = legend {
+        f.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
     let show_sort = matches!(app.focus, Focus::Processes);
@@ -350,9 +370,13 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         Focus::Sessions => app.selected_session_is_jumpable(),
         _ => false,
     };
-    let items: [Option<&str>; 7] = [
+    // Unlike `o`, this needs nothing of the host: any session row can be
+    // asked what it is doing.
+    let show_details = matches!(app.focus, Focus::Sessions) && !app.sessions().is_empty();
+    let items: [Option<&str>; 8] = [
         Some("↑↓ select"),
         show_sort.then_some("c/m sort"),
+        show_details.then_some("d details"),
         show_open.then_some("o open"),
         show_kill.then_some("k kill"),
         Some("s settings"),
@@ -368,7 +392,8 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     // Dropped first to last: settings (discoverable elsewhere), select (the
     // arrow keys are a safe guess), sort, then the card-specific actions.
     // "tab focus" and "q quit" are never dropped.
-    const DROP_ORDER: [&str; 5] = ["s settings", "↑↓ select", "c/m sort", "o open", "k kill"];
+    const DROP_ORDER: [&str; 6] =
+        ["s settings", "↑↓ select", "c/m sort", "o open", "d details", "k kill"];
     let mut shown: Vec<&str> = items.into_iter().flatten().collect();
     for victim in DROP_ORDER {
         let width: usize =

@@ -10,6 +10,8 @@
 
 use std::path::PathBuf;
 
+use super::claude_state::{ActivityFacts, SessionRecord};
+
 /// What `slow.rs` reads per candidate pid.
 pub struct SessionFacts {
     pub pid: i32,
@@ -38,6 +40,17 @@ pub struct ClaudeSession {
     /// Controlling terminal, e.g. `ttys021`. This is what distinguishes two
     /// sessions in the same project: it says which pane to go to.
     pub tty: Option<String>,
+    /// What `slow.rs` observed about what this session is doing. Raw
+    /// observations, not conclusions: `claude_state::state` turns them into
+    /// an activity against the `now` of whichever frame asks.
+    pub facts: ActivityFacts,
+    /// Claude Code's own record of the session, when there is one to read.
+    ///
+    /// Carried whole rather than copied field by field: everything the
+    /// details dialog wants — the full path, the account, the build, when it
+    /// started — is already here, and a parallel struct holding a subset
+    /// would only be a second thing to keep in step.
+    pub record: Option<SessionRecord>,
 }
 
 /// Keep the Claude processes and turn them into rows, ordered by project, then
@@ -66,6 +79,8 @@ pub fn build_sessions(facts: &[SessionFacts]) -> Vec<ClaudeSession> {
             // Both filled in by `slow.rs` once the host has been asked.
             title: None,
             jumpable: false,
+            facts: ActivityFacts::default(),
+            record: None,
         })
         .collect();
     out.sort_by(|a, b| {
