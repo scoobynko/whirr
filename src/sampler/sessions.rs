@@ -10,6 +10,8 @@
 
 use std::path::PathBuf;
 
+use super::claude_state::SessionState;
+
 /// What `slow.rs` reads per candidate pid.
 pub struct SessionFacts {
     pub pid: i32,
@@ -38,6 +40,10 @@ pub struct ClaudeSession {
     /// Controlling terminal, e.g. `ttys021`. This is what distinguishes two
     /// sessions in the same project: it says which pane to go to.
     pub tty: Option<String>,
+    /// Working, waiting, or about to start again on its own. Filled in by
+    /// `slow.rs` from Claude Code's own state files; a session it cannot read
+    /// keeps the `Unknown` default rather than being dropped from the card.
+    pub state: SessionState,
 }
 
 /// Keep the Claude processes and turn them into rows, ordered by project, then
@@ -66,6 +72,7 @@ pub fn build_sessions(facts: &[SessionFacts]) -> Vec<ClaudeSession> {
             // Both filled in by `slow.rs` once the host has been asked.
             title: None,
             jumpable: false,
+            state: SessionState::default(),
         })
         .collect();
     out.sort_by(|a, b| {

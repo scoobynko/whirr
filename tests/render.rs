@@ -791,10 +791,15 @@ fn a_titled_session_shows_the_project_as_well_as_the_title() {
     // The title says what the session is doing; the project says which
     // codebase it is doing it in. Two sessions can easily be doing similar
     // things in different repos, so neither replaces the other.
+    //
+    // The title is the column that gives ground when the state column wants
+    // room, and it is the right one to take from: it is already truncated at
+    // most widths, and losing the end of a sentence costs less than not
+    // knowing the session is looping.
     let g = draw_grid_app(&App::demo(), 160, 45);
     let row = g
         .iter()
-        .find(|l| l.contains("Fix the port picker"))
+        .find(|l| l.contains("Fix the"))
         .expect("the host's own title should be shown");
     assert!(row.contains("whirr"), "the project should still be on the row: {row:?}");
 }

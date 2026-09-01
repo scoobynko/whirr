@@ -2,6 +2,7 @@ use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 use crate::app::{App, Focus};
+use crate::sampler::claude_state::Activity;
 use crate::sampler::ports::{PortGroup, PortRow};
 use super::text::{pad, trunc, width as disp_width};
 
@@ -191,7 +192,10 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
             // The marker carries the group when there is no header to do it.
             let (glyph, colour) = match r.group {
                 PortGroup::Localhost => ("●", app.theme.accent),
-                PortGroup::Claude => ("○", app.theme.text),
+                // A Claude row's marker is its state, not its group: the same
+                // shape and the same colour the sessions card uses one tier
+                // up. The group is already legible from where the row sits.
+                PortGroup::Claude => claude_marker(app, r.pid),
                 PortGroup::Other => ("○", app.theme.dim),
             };
             spans.push(Span::styled(glyph, if selected { base } else { Style::default().fg(colour) }));
@@ -207,7 +211,11 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
                 // the port prefix first, then the CPU column entirely, rather
                 // than let either get clipped mid-value — a dropped column
                 // is honest, a severed number is not.
-                let label_field_width = 1 + LABEL_WIDTH; // leading space + label
+                // Leading space + label, plus the state glyph and its space
+                // when the row carries one. The glyph is never dropped: it is
+                // two cells, and it is the only column that says whether this
+                // session is running without you.
+                let label_field_width = 1 + LABEL_WIDTH + if headers { 2 } else { 0 };
                 let port_prefix_width = if headers { CLAUDE_PORT_PREFIX_WIDTH } else { 0 };
                 let mut show_port_prefix = headers;
                 let mut show_cpu = true;
@@ -219,6 +227,15 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
                 }
                 if show_port_prefix {
                     spans.push(Span::styled(format!(" :{:<6}", r.ports[0]), base.bold()));
+                }
+                // With headers there is no marker column, so the state glyph
+                // rides the row itself. Its two cells were budgeted above.
+                if headers {
+                    let (glyph, colour) = claude_marker(app, r.pid);
+                    spans.push(Span::styled(
+                        format!(" {glyph}"),
+                        if selected { base } else { Style::default().fg(colour) },
+                    ));
                 }
                 spans.push(Span::styled(
                     format!(" {}", pad(&trunc(&r.label, LABEL_WIDTH), LABEL_WIDTH)),
@@ -267,6 +284,24 @@ pub fn render(f: &mut Frame, area: Rect, app: &App, card: Card) {
     f.render_widget(Paragraph::new(lines), inner);
 }
 
+
+/// The shape and colour a Claude row wears, joined on by pid so the grouped
+/// card and the sessions card say the same thing about the same session.
+///
+/// A pid with no state — a port-sourced row whose process the session scan
+/// did not match — keeps the hollow shape rather than inventing one.
+fn claude_marker(app: &App, pid: i32) -> (&'static str, ratatui::style::Color) {
+    let Some(st) = app.session_state(pid) else { return ("○", app.theme.text) };
+    let colour = if st.warn {
+        app.theme.amber
+    } else if matches!(st.activity, Activity::Busy) {
+        app.theme.accent
+    } else {
+        app.theme.text
+    };
+    (super::sessions::glyph(&st.activity), colour)
+}
+
 #[cfg(test)]
 mod tests {
     /// The palette the app starts with; tests assert against it by name
@@ -276,8 +311,12 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
+    use std::time::Duration;
+
     use crate::app::{App, Focus};
+    use crate::sampler::claude_state::{Activity, SessionState};
     use crate::sampler::ports::{PortGroup, PortRow};
+    use crate::sampler::sessions::ClaudeSession;
     use crate::sampler::{SlowSnap, Snapshot};
 
     /// Render a given `App`'s ports card at a given size.
@@ -302,6 +341,30 @@ mod tests {
         app.focus = Focus::Localhost;
         app.ingest(Snapshot::Slow(SlowSnap { rows, sessions: Vec::new(), stale: false }));
         app.select(selected);
+        app
+    }
+
+    /// A card holding one Claude row and the session it belongs to, joined by
+    /// pid the way the real snapshot joins them.
+    fn app_with_session(activity: Activity, warn: bool) -> App {
+        let mut app = App::new(false);
+        app.ingest(Snapshot::Slow(SlowSnap {
+            rows: vec![PortRow {
+                group: PortGroup::Claude,
+                label: "axterio".into(),
+                pid: 700,
+                ports: vec![65067],
+            }],
+            sessions: vec![ClaudeSession {
+                pid: 700,
+                project: "axterio".into(),
+                title: None,
+                jumpable: false,
+                tty: Some("ttys020".into()),
+                state: SessionState { activity, subagents: 0, warn },
+            }],
+            stale: false,
+        }));
         app
     }
 
@@ -720,4 +783,35 @@ mod tests {
         );
     }
 
+
+    #[test]
+    fn the_grouped_card_wears_the_same_shapes_as_the_sessions_card() {
+        // Below the width that earns three cards, sessions live inside the
+        // grouped ports card. Reading the same shape in both places is the
+        // difference between one design at every size and two.
+        for (activity, shape) in [
+            (Activity::Busy, '●'),
+            (Activity::Loop { wakes_in: Duration::from_secs(60) }, '◐'),
+            (Activity::BgJob, '◐'),
+            (Activity::Idle { since: None }, '○'),
+        ] {
+            let app = app_with_session(activity.clone(), false);
+            let out = draw_app(&app, 60, 10).join("\n");
+            let row = out.lines().find(|l| l.contains("axterio")).expect("the row is drawn");
+            assert!(row.contains(shape), "{activity:?} should wear {shape}: {row:?}");
+        }
+    }
+
+    #[test]
+    fn a_claude_row_with_no_session_behind_it_keeps_the_hollow_shape() {
+        // A port-sourced row whose process the session scan never matched.
+        // Inventing a state for it would be worse than saying nothing.
+        let app = app_with_rows(
+            vec![PortRow { group: PortGroup::Claude, label: "orphan".into(), pid: 900, ports: vec![65000] }],
+            0,
+        );
+        let out = draw_app(&app, 60, 10).join("\n");
+        let row = out.lines().find(|l| l.contains("orphan")).expect("the row is drawn");
+        assert!(row.contains('○'), "an unknown session stays hollow: {row:?}");
+    }
 }

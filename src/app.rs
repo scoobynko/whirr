@@ -6,6 +6,7 @@ use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
 use crate::sampler::ports::{self, PortGroup, PortRow};
 use crate::settings::Settings;
+use crate::sampler::claude_state::{Activity, SessionState};
 use crate::sampler::sessions::ClaudeSession;
 use crate::sampler::{
     BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
@@ -305,11 +306,17 @@ impl App {
                     ports: vec![5000, 7000],
                 },
             ],
+            // One session per state the card can show, so the demo exercises
+            // every branch of the renderer rather than four idle rows.
             sessions: vec![
-                ClaudeSession { pid: 601, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys020".into()) },
-                ClaudeSession { pid: 602, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys021".into()) },
-                ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), jumpable: true, tty: Some("ttys004".into()) },
-                ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, jumpable: false, tty: None },
+                ClaudeSession { pid: 601, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys020".into()),
+                    state: SessionState { activity: Activity::Busy, subagents: 2, warn: false } },
+                ClaudeSession { pid: 602, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys021".into()),
+                    state: SessionState { activity: Activity::Loop { wakes_in: Duration::from_secs(260) }, subagents: 0, warn: true } },
+                ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), jumpable: true, tty: Some("ttys004".into()),
+                    state: SessionState { activity: Activity::Idle { since: Duration::from_secs(90).into() }, subagents: 0, warn: false } },
+                ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, jumpable: false, tty: None,
+                    state: SessionState { activity: Activity::BgJob, subagents: 0, warn: true } },
             ],
             stale: false,
         }));
@@ -391,6 +398,15 @@ impl App {
     /// the fast tick. Unlike `processes`, this searches the full list.
     pub fn cpu_of(&self, pid: i32) -> Option<f32> {
         self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
+    }
+
+    /// What a session is doing, for a row that knows only its pid.
+    ///
+    /// The grouped ports card carries Claude sessions too, at widths where
+    /// they get no card of their own, and its rows are port-sourced — so the
+    /// state has to be joined back on by pid rather than carried with them.
+    pub fn session_state(&self, pid: i32) -> Option<&SessionState> {
+        self.sessions().iter().find(|s| s.pid == pid).map(|s| &s.state)
     }
 
     /// Port rows belonging to the localhost card.

@@ -1,11 +1,11 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::mpsc::Sender;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use super::ports::PortRow;
-use super::{ports, sessions};
+use super::{claude_state, ports, sessions};
 use super::{PortInfo, SlowSnap, Snapshot};
 
 const TICK: Duration = Duration::from_secs(10);
@@ -19,11 +19,10 @@ const TICK: Duration = Duration::from_secs(10);
 /// label. Hosts that cannot answer cheaply return nothing and the rows keep
 /// the project name — reading titles out of AppleScript would mean *waiting*
 /// on it, which can block for minutes.
-fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
+fn attach_titles(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32, i32>) {
     if sessions.is_empty() {
         return;
     }
-    let parents = crate::host::parent_map();
     // Detected per session, not once for the whole list. Sessions can live in
     // different terminals at the same time, and asking only the first one's
     // host meant a single session in a terminal that cannot answer stripped
@@ -34,7 +33,7 @@ fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
     let mut by_host: BTreeMap<std::path::PathBuf, Vec<crate::host::Surface>> = BTreeMap::new();
     for s in sessions.iter_mut() {
         let Some(tty) = s.tty.clone() else { continue };
-        let Some(host) = crate::host::detect_with(s.pid, &parents) else { continue };
+        let Some(host) = crate::host::detect_with(s.pid, parents) else { continue };
         let surfaces = by_host
             .entry(host.bundle.clone())
             .or_insert_with(|| crate::host::surfaces(&host));
@@ -52,6 +51,82 @@ fn attach_titles(sessions: &mut [sessions::ClaudeSession]) {
                 s.jumpable = matches!(host.kind, crate::host::HostKind::AppleScript { .. })
             }
         }
+    }
+}
+
+/// How much of a transcript's tail to read looking for an armed wakeup.
+///
+/// A session waiting on one is quiet, so the call that armed it is within a
+/// few kilobytes of the end — everything written after it is the tool result
+/// and a couple of bookkeeping records. Reading the whole file would mean
+/// scanning tens of megabytes of history every tick for a record that is
+/// either at the end or absent.
+const TAIL: u64 = 64 * 1024;
+
+/// Time until this session's armed wakeup fires, if it has one armed.
+fn pending_wake(transcript: &Path, now: SystemTime) -> Option<Duration> {
+    let grew_until = std::fs::metadata(transcript).and_then(|m| m.modified()).ok()?;
+    let tail = claude_state::read_tail(transcript, TAIL)?;
+    claude_state::armed_wake_at(&tail, grew_until)?.duration_since(now).ok()
+}
+
+/// Attach what each session is doing: busy, looping, running a background
+/// shell, or waiting for you.
+///
+/// A session whose state cannot be read keeps `Unknown` and stays on the card.
+/// Losing a row because its config root moved would be a worse failure than
+/// showing it without a state — the row is still a session you can jump to.
+fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32, i32>) {
+    if sessions.is_empty() {
+        return;
+    }
+    let roots = std::env::var_os("HOME")
+        .map(|h| claude_state::config_roots(Path::new(&h)))
+        .unwrap_or_default();
+    // Every root's session files, read once per tick: a few hundred bytes
+    // each, one per session that is running.
+    let records: HashMap<i32, claude_state::SessionRecord> = roots
+        .iter()
+        .flat_map(|root| {
+            std::fs::read_dir(root.join("sessions"))
+                .into_iter()
+                .flatten()
+                .flatten()
+                .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+                .filter_map(move |e| {
+                    let text = std::fs::read_to_string(e.path()).ok()?;
+                    claude_state::parse_session_record(&text, root)
+                })
+        })
+        .map(|r| (r.pid, r))
+        .collect();
+    let now = SystemTime::now();
+    for s in sessions.iter_mut() {
+        let mut facts = claude_state::ActivityFacts {
+            shells: claude_state::shell_children(s.pid, parents, crate::mac::proc::exec_path),
+            ..Default::default()
+        };
+        if let Some(rec) = records.get(&s.pid) {
+            facts.status = rec.status;
+            facts.status_age = rec
+                .status_updated_at
+                .and_then(|t| now.duration_since(t).ok());
+            if let Some(transcript) = claude_state::transcript_of(rec) {
+                // `<session id>.jsonl` and `<session id>/subagents` are
+                // siblings, so dropping the extension gets from one to the
+                // other.
+                let dir = transcript.with_extension("").join("subagents");
+                facts.subagents = claude_state::hot_subagents(&dir, now);
+                // Only a quiet session can be waiting on a wakeup, and this
+                // is the one read in the tick that touches a large file — so
+                // the session actively writing to its transcript is exactly
+                // the one that never pays for it.
+                if rec.status != Some(claude_state::Status::Busy) {
+                    facts.wakes_in = pending_wake(&transcript, now);
+                }
+            }
+        }
+        s.state = claude_state::state(&facts);
     }
 }
 
@@ -180,7 +255,11 @@ pub fn run(tx: Sender<Snapshot>) {
         // what keeps an lsof failure — or a machine with no listening sockets
         // at all — from blanking the sessions card.
         let mut sessions = scan_sessions();
-        attach_titles(&mut sessions);
+        // One `ps` shared by both passes: the host lookup walks parents up to
+        // the terminal, the state lookup walks them down to the shells.
+        let parents = crate::host::parent_map();
+        attach_titles(&mut sessions, &parents);
+        attach_state(&mut sessions, &parents);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
@@ -320,3 +399,31 @@ n*:7000
     }
 }
 
+
+#[cfg(test)]
+mod live {
+    /// Not an assertion about behaviour: a way to look at what this machine's
+    /// own sessions report, which no fixture can stand in for. Every state
+    /// here comes from files and processes that only exist at runtime.
+    ///
+    /// `cargo test --lib live -- --ignored --nocapture`
+    #[test]
+    #[ignore]
+    fn show_this_machines_sessions() {
+        let mut sessions = super::scan_sessions();
+        let parents = crate::host::parent_map();
+        super::attach_state(&mut sessions, &parents);
+        for s in &sessions {
+            println!(
+                "{:>6} {:<28} {:<9} {:?} subagents={} warn={}",
+                s.pid,
+                s.project,
+                s.tty.as_deref().unwrap_or("-"),
+                s.state.activity,
+                s.state.subagents,
+                s.state.warn
+            );
+        }
+        assert!(!sessions.is_empty(), "whirr's own session should be running this");
+    }
+}

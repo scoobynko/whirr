@@ -52,6 +52,19 @@ there would be nothing to show.
 
 Settings stick in `~/.config/whirr/config.toml`.
 
+## Claude sessions
+
+Every running session, whether or not it holds a socket, with what it is doing
+beside it. Filled is working, half-filled is running with nobody watching,
+hollow is waiting for you. The word says which: `busy ×2` counts subagents,
+`loop 4m` counts down to a wakeup the session armed for itself, `bg job` is a
+shell that outlived its turn, `idle 14d` is a session you forgot.
+
+Amber marks the ones running without you. Claude Code publishes its own
+busy/idle flag, so none of this is guessed from CPU. Sessions from a second
+account are included — whirr reads every `~/.claude*` config root, not just
+the default one.
+
 ## Performance
 
 Under 0.5% CPU, under 25 MB, left running all day.

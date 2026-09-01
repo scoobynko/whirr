@@ -2,12 +2,63 @@
 //! session — including the ones holding no listening socket, which a
 //! port-sourced list cannot see.
 
+use std::time::Duration;
+
 use ratatui::prelude::*;
 use ratatui::widgets::Paragraph;
 
 
 use crate::app::{App, Focus};
+use crate::sampler::claude_state::{Activity, SessionState};
 use crate::sampler::sessions::ClaudeSession;
+
+/// The shape of a session at a glance, before any word is read: filled is
+/// working, half-filled is running with nobody watching, hollow is waiting for
+/// you. Three shapes rather than one per state — the word beside it says
+/// whether "running without you" is a loop or a shell, and a row too narrow
+/// for the word is still readable as the thing that matters.
+pub fn glyph(a: &Activity) -> &'static str {
+    match a {
+        Activity::Busy => "●",
+        Activity::Loop { .. } | Activity::BgJob => "◐",
+        Activity::Idle { .. } => "○",
+        Activity::Unknown => "·",
+    }
+}
+
+/// A duration in one unit, the largest that leaves a number worth reading.
+/// The card has eight columns for a whole state; "4m" earns its place there
+/// and "4m 12s" does not.
+fn brief(d: Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0..=59 => format!("{s}s"),
+        60..=3599 => format!("{}m", s / 60),
+        3600..=172_799 => format!("{}h", s / 3600),
+        _ => format!("{}d", s / 86_400),
+    }
+}
+
+/// What the state column says. Empty when there is nothing to say, so a
+/// session whose state whirr cannot read shows blank rather than a guess.
+pub fn label(st: &SessionState) -> String {
+    match &st.activity {
+        // Subagents only ever run inside a turn, so they qualify "busy"
+        // rather than standing as a state of their own.
+        Activity::Busy if st.subagents > 0 => format!("busy \u{00d7}{}", st.subagents),
+        Activity::Busy => "busy".into(),
+        Activity::Loop { wakes_in } => format!("loop {}", brief(*wakes_in)),
+        Activity::BgJob => "bg job".into(),
+        // How long only matters once it is long enough to be a surprise;
+        // until then it is a number that changes every second and says
+        // nothing.
+        Activity::Idle { since } => match since.filter(|_| st.warn) {
+            Some(d) => format!("idle {}", brief(d)),
+            None => "idle".into(),
+        },
+        Activity::Unknown => String::new(),
+    }
+}
 
 pub fn render(f: &mut Frame, area: Rect, app: &App) {
     let focused = matches!(app.focus, Focus::Sessions);
@@ -32,6 +83,14 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     // first so a long project name cannot push them off the edge.
     const TTY_W: usize = 8;
     const CPU_W: usize = 6;
+    // "loop 40s" and "idle 14d" are the longest things the column ever says.
+    const STATE_W: usize = 8;
+    // The glyph and the space after it. Unlike the words, this is never
+    // dropped: it is two columns, and it is the whole point of the card.
+    const GLYPH_W: usize = 2;
+    // Below this a name is being cut to make room for a word that repeats
+    // what the glyph already said, which is a bad trade at any width.
+    const MIN_LABEL: usize = 12;
 
     // The tty is only ever an answer to "which of these two identical rows is
     // which". On a project with a single session it is 8 columns telling you
@@ -56,7 +115,17 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
     };
     let any_collision = sessions.iter().any(collides);
     let tty_w = if any_collision { TTY_W } else { 0 };
-    let label_w = (inner.width as usize).saturating_sub(tty_w + CPU_W + 2);
+    let fixed = GLYPH_W + tty_w + CPU_W + 2;
+    // The words go only where they fit. A narrow card keeps the glyph and
+    // gives every remaining column to the name, which is the same design one
+    // size down rather than a different one.
+    let room = (inner.width as usize).saturating_sub(fixed);
+    // Reserved for the whole card only when some row has something to put
+    // there, the same rule the tty column follows: eight blank columns on
+    // every row would be worse than the glyph carrying it alone.
+    let any_state = sessions.iter().any(|s| !label(&s.state).is_empty());
+    let state_w = if any_state && room >= MIN_LABEL + STATE_W { STATE_W } else { 0 };
+    let label_w = room - state_w;
     // The project gets what it needs up to a ceiling; the title takes the
     // rest, and gets nothing when there is nothing to spare.
     let widest_project = sessions.iter().map(|s| s.project.chars().count()).max().unwrap_or(0);
@@ -81,7 +150,23 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                 // An em-dash with no percent sign: unknown, not idle.
                 None => format!("{:>w$}", "—", w = CPU_W),
             };
+            let st = &s.state;
+            // Amber is the whole anomaly treatment: a loop, an orphaned
+            // shell, a turn that never ended, a session open for days. The
+            // state word says which, so a separate marker column would be
+            // paying eight cells to repeat it.
+            let tone = if st.warn {
+                app.theme.amber
+            } else if matches!(st.activity, Activity::Busy) {
+                app.theme.accent
+            } else {
+                app.theme.dim
+            };
             Line::from(vec![
+                Span::styled(
+                    format!(" {}", super::sessions::glyph(&st.activity)),
+                    if selected { base } else { Style::default().fg(tone) },
+                ),
                 // The host's own title when it has one — cmux names a
                 // workspace after the task the session is doing, which beats
                 // a project directory. Display only: the sort stays on
@@ -112,6 +197,13 @@ pub fn render(f: &mut Frame, area: Rect, app: &App) {
                     if selected { base } else { Style::default().fg(app.theme.dim) },
                 ),
                 Span::styled(
+                    match state_w {
+                        0 => String::new(),
+                        w => format!("{:<w$}", super::text::trunc(&label(st), w), w = w),
+                    },
+                    if selected { base } else { Style::default().fg(tone) },
+                ),
+                Span::styled(
                     cpu,
                     if selected { base } else { Style::default().fg(app.theme.accent) },
                 ),
@@ -126,8 +218,10 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::Terminal;
 
+    use std::time::Duration;
+
     use crate::app::App;
-    use super::ClaudeSession;
+    use super::{label, Activity, ClaudeSession, SessionState};
 
     fn draw(w: u16, h: u16) -> Vec<String> {
         draw_app(&App::demo(), w, h)
@@ -176,8 +270,9 @@ mod tests {
                 title: None,
                 jumpable: false,
                 tty: Some("ttys001".into()),
+                state: SessionState::default(),
             },
-            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()) },
+            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()), state: SessionState::default() },
         ];
         let out = draw_app(&app, 40, 8).join("\n");
         assert!(!out.contains("ttys001"), "no collisions, so no tty column:\n{out}");
@@ -193,6 +288,105 @@ mod tests {
         assert!(out.contains("8.1"), "known CPU missing:\n{out}");
         assert!(out.contains('—'), "unknown CPU should render an em-dash:\n{out}");
         assert!(!out.contains("—%"), "em-dash must not be followed by a percent sign");
+    }
+
+    #[test]
+    fn every_state_says_what_it_is() {
+        let out = draw(160, 8).join("\n");
+        // One demo session per state, so this covers the whole vocabulary.
+        for word in ["busy ×2", "loop 4m", "idle", "bg job"] {
+            assert!(out.contains(word), "state {word:?} missing:\n{out}");
+        }
+        for shape in ['●', '◐', '○'] {
+            assert!(out.contains(shape), "glyph {shape:?} missing:\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_countdown_says_when_the_loop_starts_again() {
+        // The point of showing a loop at all: not just that one is armed, but
+        // how long you have before it spends anything.
+        assert_eq!(
+            label(&SessionState {
+                activity: Activity::Loop { wakes_in: Duration::from_secs(260) },
+                subagents: 0,
+                warn: true
+            }),
+            "loop 4m"
+        );
+        assert_eq!(
+            label(&SessionState {
+                activity: Activity::Loop { wakes_in: Duration::from_secs(40) },
+                subagents: 0,
+                warn: true
+            }),
+            "loop 40s"
+        );
+    }
+
+    #[test]
+    fn idle_says_how_long_only_once_that_is_a_surprise() {
+        // A number that changes every second and means nothing is noise; the
+        // same number after a fortnight is the whole message.
+        let fresh = SessionState {
+            activity: Activity::Idle { since: Some(Duration::from_secs(90)) },
+            subagents: 0,
+            warn: false,
+        };
+        assert_eq!(label(&fresh), "idle");
+        let forgotten = SessionState { warn: true, ..fresh };
+        assert_eq!(label(&forgotten), "idle 1m");
+    }
+
+    #[test]
+    fn a_session_whose_state_cannot_be_read_says_nothing_rather_than_guessing() {
+        assert_eq!(label(&SessionState::default()), "");
+        // And with nothing to put there, the column is not reserved at all.
+        let mut app = App::demo();
+        let slow = app.slow.as_mut().expect("demo() ingests a slow snapshot");
+        for s in slow.sessions.iter_mut() {
+            s.state = SessionState::default();
+        }
+        let out = draw_app(&app, 160, 8).join("\n");
+        for word in ["busy", "loop", "idle", "bg job"] {
+            assert!(!out.contains(word), "nothing known, so nothing said: {word:?}\n{out}");
+        }
+    }
+
+    #[test]
+    fn a_narrow_card_keeps_the_shape_and_drops_the_word() {
+        // The same design one size down, not a different one: the glyph is
+        // two cells and never goes, the words go when a name would have to be
+        // cut to seat them.
+        let out = draw(36, 8).join("\n");
+        assert!(out.contains('◐'), "the shape must survive any width:\n{out}");
+        assert!(!out.contains("bg job"), "the word should have given up its columns:\n{out}");
+    }
+
+    #[test]
+    fn a_session_running_without_you_is_the_one_that_stands_out() {
+        // Amber is the whole anomaly treatment. A loop and an orphaned shell
+        // wear it; a session working while you watch does not.
+        let app = App::demo();
+        let amber = app.theme.amber;
+        let mut t = Terminal::new(TestBackend::new(160, 8)).unwrap();
+        t.draw(|f| super::render(f, f.area(), &app)).unwrap();
+        let b = t.backend().buffer().clone();
+        let tone = |needle: &str| {
+            (0..8).find_map(|y| {
+                let row: String =
+                    (0..160).map(|x| b[(x, y)].symbol().to_string()).collect::<String>();
+                row.contains(needle).then(|| {
+                    let at = row.find(needle).expect("just matched");
+                    b[(at as u16, y)].style().fg
+                })
+            })
+            .flatten()
+        };
+        assert_eq!(tone("loop 4m"), Some(amber), "an armed loop must stand out");
+        assert_eq!(tone("bg job"), Some(amber), "an orphaned shell must stand out");
+        assert_ne!(tone("busy"), Some(amber), "working while you watch is normal");
+        assert_ne!(tone("idle"), Some(amber), "so is waiting for you");
     }
 
     #[test]
