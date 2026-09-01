@@ -67,6 +67,11 @@ outlived its turn, `scheduled` is one a cron or a `/schedule` wakes up,
 
 Amber means it is running without you. That is the whole point of the card.
 
+The subagent count is the one number here that is a guess. Nothing on disk
+says when an agent finishes, so whirr counts the ones whose logs are still
+being written. An agent that has finished stays on the count for a few minutes
+after. Everything else on the card is read, not inferred.
+
 None of this is guessed from CPU. Claude Code writes its own busy flag and
 whirr reads it. A session that says it is busy but stopped writing goes amber
 too, because that one is stuck, not working.

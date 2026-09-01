@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::mpsc::Sender;
@@ -181,10 +181,32 @@ fn pending_wake(transcript: &Path) -> Option<SystemTime> {
 struct Arranged {
     /// How far into the transcript this has read.
     offset: u64,
-    /// Live crons, by id, each with the schedule in Claude Code's words.
+    /// Crons made here, by id, each with the schedule in Claude Code's words.
+    /// Whether they are still live is not a question this can answer alone.
     crons: BTreeMap<String, String>,
     /// When a scheduled task last woke the session.
     last_fire: Option<SystemTime>,
+}
+
+/// Every session's ledger, plus the deletions that apply across all of them.
+///
+/// Crons are the user's, not the session's: they live on the server, and any
+/// session can delete one that another made. Keeping deletions per session
+/// meant a cron deleted from a second window stayed on the first one's row
+/// forever, which is exactly what happened — made in one session, deleted from
+/// another in the same project, and the card went on saying `scheduled`.
+#[derive(Default)]
+struct Ledger {
+    by_session: HashMap<String, Arranged>,
+    /// Ids deleted anywhere. Grows only; a cron id is never reused.
+    deleted: HashSet<String>,
+}
+
+impl Ledger {
+    /// The crons a session made that nobody has since deleted.
+    fn live(&self, session: &str) -> Vec<String> {
+        self.by_session.get(session).into_iter().flat_map(|a| &a.crons).filter(|(id, _)| !self.deleted.contains(*id)).map(|(_, schedule)| schedule.clone()).collect()
+    }
 }
 
 /// Fold whatever has been appended to `path` into `at`.
@@ -192,21 +214,21 @@ struct Arranged {
 /// Reads a line at a time and keeps only the few that could carry a record, so
 /// a first pass over a 26 MB transcript costs one sequential read and a
 /// kilobyte of memory rather than a 26 MB allocation.
-fn read_arranged(path: &Path, at: &mut Arranged) {
+fn read_arranged(path: &Path, at: &mut Arranged) -> Vec<String> {
     use std::io::{BufRead, BufReader, Seek, SeekFrom};
-    let Ok(file) = std::fs::File::open(path) else { return };
-    let Ok(len) = file.metadata().map(|m| m.len()) else { return };
+    let Ok(file) = std::fs::File::open(path) else { return Vec::new() };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return Vec::new() };
     // Shorter than last time means a different file under the same name.
     // Reading on from the old offset would land mid-record.
     if len < at.offset {
         *at = Arranged::default();
     }
     if len == at.offset {
-        return;
+        return Vec::new();
     }
     let mut reader = BufReader::new(file);
     if reader.seek(SeekFrom::Start(at.offset)).is_err() {
-        return;
+        return Vec::new();
     }
     let (mut wanted, mut line) = (String::new(), String::new());
     loop {
@@ -231,35 +253,20 @@ fn read_arranged(path: &Path, at: &mut Arranged) {
         }
     }
     let found = claude_state::scan_unattended(&wanted);
-    // Ids are unique per creation, so applying the creations and the deletions
-    // of one slice in either order gives the same answer.
     at.crons.extend(found.created);
-    for id in found.deleted {
-        at.crons.remove(&id);
-    }
     at.last_fire = found.last_fire.or(at.last_fire);
+    found.deleted
 }
 
-/// Attach what each session is doing: busy, looping, running a background
-/// shell, or waiting for you.
+/// Claude Code's own record of every session it is running, by pid.
 ///
-/// A session whose state cannot be read keeps `Unknown` and stays on the card.
-/// Losing a row because its config root moved would be a worse failure than
-/// showing it without a state — the row is still a session you can jump to.
-fn attach_state(
-    sessions: &mut [sessions::ClaudeSession],
-    parents: &HashMap<i32, i32>,
-    arranged: &mut HashMap<String, Arranged>,
-) {
-    if sessions.is_empty() {
-        return;
-    }
-    let roots = std::env::var_os("HOME")
-        .map(|h| config_roots(Path::new(&h)))
-        .unwrap_or_default();
-    // Every root's session files, read once per tick: a few hundred bytes
-    // each, one per session that is running.
-    let records: HashMap<i32, claude_state::SessionRecord> = roots
+/// Read once per tick: a few hundred bytes each, one per session. It both
+/// identifies sessions and describes them, because the process alone cannot
+/// always do either.
+fn read_records() -> HashMap<i32, claude_state::SessionRecord> {
+    let roots =
+        std::env::var_os("HOME").map(|h| config_roots(Path::new(&h))).unwrap_or_default();
+    roots
         .iter()
         .flat_map(|root| {
             std::fs::read_dir(root.join("sessions"))
@@ -273,7 +280,33 @@ fn attach_state(
                 })
         })
         .map(|r| (r.pid, r))
-        .collect();
+        .collect()
+}
+
+/// Attach what each session is doing: busy, looping, running a background
+/// shell, or waiting for you.
+///
+/// A session whose state cannot be read keeps `Unknown` and stays on the card.
+/// Losing a row because its config root moved would be a worse failure than
+/// showing it without a state — the row is still a session you can jump to.
+fn attach_state(
+    sessions: &mut [sessions::ClaudeSession],
+    parents: &HashMap<i32, i32>,
+    records: &HashMap<i32, claude_state::SessionRecord>,
+    ledger: &mut Ledger,
+) {
+    // Every session Claude Code has a record for feeds the cron ledger, not
+    // just the ones on the card. A cron is deleted from whichever window is in
+    // front, and that can be a background session the card does not list —
+    // which is how a deleted cron survived: once the row stopped being shown,
+    // its deletions stopped being read along with it.
+    for rec in records.values() {
+        if let Some(transcript) = transcript_of(rec) {
+            let at = ledger.by_session.entry(rec.session_id.clone()).or_default();
+            let deleted = read_arranged(&transcript, at);
+            ledger.deleted.extend(deleted);
+        }
+    }
     let now = SystemTime::now();
     for s in sessions.iter_mut() {
         // One argv read per shell, and only for sessions that have one: the
@@ -303,35 +336,58 @@ fn attach_state(
             if rec.status != Some(claude_state::Status::Busy) {
                 s.facts.wake_at = pending_wake(&transcript);
             }
-            // Unlike the wakeup, this runs whether or not the session is
-            // working: a cron outlives the turn that made it.
-            let at = arranged.entry(rec.session_id.clone()).or_default();
-            read_arranged(&transcript, at);
-            s.facts.crons = at.crons.values().cloned().collect();
-            s.facts.last_scheduled_fire = at.last_fire;
         }
+        // Folded above, for every known session rather than only the listed
+        // ones.
+        s.facts.last_scheduled_fire =
+            ledger.by_session.get(&rec.session_id).and_then(|a| a.last_fire);
         s.record = Some(rec.clone());
+    }
+    // Only now, with every session read, is it known which crons are still
+    // live: a deletion read from one session's transcript retires a cron the
+    // row for another session is about to claim.
+    for s in sessions.iter_mut() {
+        if let Some(rec) = &s.record {
+            s.facts.crons = ledger.live(&rec.session_id);
+        }
     }
 }
 
-fn scan_sessions() -> Vec<sessions::ClaudeSession> {
+fn scan_sessions(
+    parents: &HashMap<i32, i32>,
+    records: &HashMap<i32, claude_state::SessionRecord>,
+) -> Vec<sessions::ClaudeSession> {
     let facts: Vec<sessions::SessionFacts> = crate::mac::proc::list_all_pids()
         .into_iter()
         .filter_map(|pid| {
-            let exec_path = crate::mac::proc::exec_path(pid)?;
-            if !exec_path.to_str().is_some_and(ports::is_claude) {
+            let exec_path = crate::mac::proc::exec_path(pid);
+            // Claude Code's own record settles it when the path cannot. The
+            // updater prunes old version directories out from under sessions
+            // that are still running, and `proc_pidpath` then answers nothing
+            // at all — measured here, that quietly lost the two oldest
+            // sessions on the machine, a month old on 2.1.220 and 2.1.221,
+            // which are exactly the ones a card about forgotten sessions
+            // exists to show. The process name is no help either: it is the
+            // version directory's own name, `2.1.220`.
+            let is_claude = exec_path
+                .as_deref()
+                .and_then(|p| p.to_str())
+                .is_some_and(ports::is_claude)
+                || records.contains_key(&pid);
+            if !is_claude {
                 return None;
             }
             // Only matched pids pay for the extra two calls.
             Some(sessions::SessionFacts {
                 pid,
-                exec_path: Some(exec_path),
+                is_claude,
+                exec_path,
                 cwd: crate::mac::proc::cwd(pid),
                 tty: crate::mac::proc::tty(pid).flatten(),
             })
         })
         .collect();
-    sessions::build_sessions(&facts)
+    sessions::build_sessions(&facts, parents)
 }
 
 pub fn parse_lsof(output: &str) -> Vec<PortInfo> {
@@ -435,18 +491,20 @@ pub fn run(tx: Sender<Snapshot>) {
     let mut last_good: Vec<PortRow> = Vec::new();
     // What each session has arranged to run without anyone watching, by
     // session id. See `Arranged` for why this is kept rather than re-read.
-    let mut arranged: HashMap<String, Arranged> = HashMap::new();
+    let mut ledger = Ledger::default();
     loop {
         // Ports and sessions are independent sources: sessions come from a
         // full pid walk that never consults lsof. Scanning them separately is
         // what keeps an lsof failure — or a machine with no listening sockets
         // at all — from blanking the sessions card.
-        let mut sessions = scan_sessions();
-        // One `ps` shared by both passes: the host lookup walks parents up to
+        // One `ps` shared by all three passes: the scan walks parents up
+        // looking for another Claude Code, the host lookup walks them up to
         // the terminal, the state lookup walks them down to the shells.
         let parents = crate::host::parent_map();
+        let records = read_records();
+        let mut sessions = scan_sessions(&parents, &records);
         attach_titles(&mut sessions, &parents);
-        attach_state(&mut sessions, &parents, &mut arranged);
+        attach_state(&mut sessions, &parents, &records, &mut ledger);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
@@ -458,6 +516,59 @@ pub fn run(tx: Sender<Snapshot>) {
             return;
         }
         std::thread::sleep(TICK);
+    }
+}
+
+#[cfg(test)]
+mod ledger_tests {
+    use super::Ledger;
+
+    /// One session's ledger, as `read_arranged` would leave it.
+    fn made(ledger: &mut Ledger, session: &str, crons: &[(&str, &str)]) {
+        let at = ledger.by_session.entry(session.to_string()).or_default();
+        for (id, schedule) in crons {
+            at.crons.insert(id.to_string(), schedule.to_string());
+        }
+    }
+
+    #[test]
+    fn a_cron_deleted_from_another_session_stops_being_live() {
+        // The bug this exists for: made in one window, deleted from a second
+        // one in the same project, and the first window's row went on saying
+        // `scheduled` forever. Crons live on the server; any session can
+        // retire one that another made.
+        let mut ledger = Ledger::default();
+        made(&mut ledger, "made-it", &[("190ef941", "Every 5 minutes")]);
+        assert_eq!(ledger.live("made-it"), vec!["Every 5 minutes".to_string()]);
+
+        // The deletion arrives on a different session's transcript.
+        ledger.deleted.insert("190ef941".to_string());
+        assert!(ledger.live("made-it").is_empty(), "a deletion anywhere retires it");
+    }
+
+    #[test]
+    fn deleting_one_cron_leaves_the_others_alone() {
+        let mut ledger = Ledger::default();
+        made(&mut ledger, "a", &[("one", "Every 5 minutes"), ("two", "Every 10 minutes")]);
+        ledger.deleted.insert("one".to_string());
+        assert_eq!(ledger.live("a"), vec!["Every 10 minutes".to_string()]);
+    }
+
+    #[test]
+    fn a_session_that_made_nothing_has_nothing_live() {
+        let mut ledger = Ledger::default();
+        made(&mut ledger, "a", &[("one", "Every 5 minutes")]);
+        assert!(ledger.live("never-heard-of-it").is_empty());
+    }
+
+    #[test]
+    fn a_deletion_seen_before_the_creation_still_counts() {
+        // Ticks read sessions in an arbitrary order, so the window that
+        // deleted a cron can be read before the one that made it.
+        let mut ledger = Ledger::default();
+        ledger.deleted.insert("190ef941".to_string());
+        made(&mut ledger, "made-it", &[("190ef941", "Every 5 minutes")]);
+        assert!(ledger.live("made-it").is_empty());
     }
 }
 
@@ -599,9 +710,10 @@ mod live {
     #[test]
     #[ignore]
     fn show_this_machines_sessions() {
-        let mut sessions = super::scan_sessions();
         let parents = crate::host::parent_map();
-        super::attach_state(&mut sessions, &parents, &mut Default::default());
+        let records = super::read_records();
+        let mut sessions = super::scan_sessions(&parents, &records);
+        super::attach_state(&mut sessions, &parents, &records, &mut Default::default());
         let now = std::time::SystemTime::now();
         for s in &sessions {
             let st = super::claude_state::state(&s.facts, now);
