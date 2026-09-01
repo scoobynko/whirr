@@ -399,6 +399,7 @@ impl App {
                     status: Some(Status::Idle),
                     status_since: Some(Self::ago(1_800)),
                     last_scheduled_fire: Some(Self::ago(1_800)),
+                    crons: vec!["Every 5 minutes".into()],
                     ..Default::default()
                 }),
             ],

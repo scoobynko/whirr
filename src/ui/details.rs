@@ -41,8 +41,16 @@ fn state_line(st: &SessionState, facts: &ActivityFacts, now: SystemTime) -> Stri
             format!("loop · wakes in {}", fmt_duration(wakes_in.as_secs()))
         }
         Activity::BgJob => "bg job · waiting on a shell".into(),
+        // The schedule in Claude Code's own words when there is a live cron
+        // to read it off, and when it last fired if it ever has. There is no
+        // next-fire time anywhere on disk, so none is offered.
         Activity::Scheduled { last_fire } => {
-            format!("scheduled · last ran {} ago", fmt_duration(last_fire.as_secs()))
+            let mut parts = vec!["scheduled".to_string()];
+            parts.extend(facts.crons.iter().cloned());
+            parts.extend(
+                last_fire.map(|d| format!("last ran {} ago", fmt_duration(d.as_secs()))),
+            );
+            parts.join(" · ")
         }
         Activity::Idle { since } => match since {
             Some(d) => format!("idle · {}", fmt_duration(d.as_secs())),
@@ -192,7 +200,13 @@ mod tests {
         assert!(text(&demo(3))[0].contains("bg job"));
         // The card has room for "scheduled" and nothing else; here there is
         // room to say when it last happened, which is the only fact there is.
-        assert!(text(&demo(4))[0].contains("scheduled · last ran 30m ago"));
+        // The schedule in Claude Code's own words, which is the only place it
+        // is written down, plus when it last fired.
+        assert!(
+            text(&demo(4))[0].contains("scheduled · Every 5 minutes · last ran 30m ago"),
+            "{:?}",
+            text(&demo(4))[0]
+        );
     }
 
     #[test]

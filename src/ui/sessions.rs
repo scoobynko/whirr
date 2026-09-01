@@ -330,7 +330,7 @@ mod tests {
         // nobody watching. Nothing on disk says when the next one lands, so
         // there is no countdown to show and none is invented.
         let st = SessionState {
-            activity: Activity::Scheduled { last_fire: Duration::from_secs(1800) },
+            activity: Activity::Scheduled { last_fire: Some(Duration::from_secs(1800)) },
             warn: true,
             ..SessionState::default()
         };

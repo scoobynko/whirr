@@ -78,8 +78,10 @@ the default one.
 background shell is running, the full path, the account, how long it has been
 open.
 
-No countdown on `scheduled`, though. The schedule itself lives on the server,
-so whirr can tell you it happens. Not when.
+`scheduled` reads the cron itself, so it shows up the moment you set one, not
+after it first fires. No countdown though. The schedule runs on the server and
+the next fire time is written nowhere, so whirr tells you it happens, and how
+often. Not when.
 
 ## Performance
 

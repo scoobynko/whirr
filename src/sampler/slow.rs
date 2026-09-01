@@ -159,17 +159,85 @@ fn read_tail(path: &Path, bytes: u64) -> Option<String> {
 /// either at the end or absent.
 const TAIL: u64 = 64 * 1024;
 
-/// What the tail of a transcript says about work the session will do on its
-/// own: an armed wakeup, and the last scheduled task to have woken it.
+/// When this session's armed wakeup will fire, if it has one armed.
 ///
-/// One read serving both. They are found by different parsers but live in the
-/// same few kilobytes, and reading the file twice to ask two questions of it
-/// would be the expensive half of this tick done twice.
-fn unattended(transcript: &Path) -> (Option<SystemTime>, Option<SystemTime>) {
-    let Some(tail) = read_tail(transcript, TAIL) else { return (None, None) };
-    let grew_until = std::fs::metadata(transcript).and_then(|m| m.modified()).ok();
-    let wake = grew_until.and_then(|t| claude_state::armed_wake_at(&tail, t));
-    (wake, claude_state::last_scheduled_fire(&tail))
+/// The tail is the right slice for this one and only this one: a session
+/// waiting on a wakeup is quiet, so the call that armed it is the last thing
+/// in the file.
+fn pending_wake(transcript: &Path) -> Option<SystemTime> {
+    let grew_until = std::fs::metadata(transcript).and_then(|m| m.modified()).ok()?;
+    let tail = read_tail(transcript, TAIL)?;
+    claude_state::armed_wake_at(&tail, grew_until)
+}
+
+/// What a session has arranged to happen without anyone at the keyboard,
+/// accumulated across ticks from the parts of its transcript read so far.
+///
+/// Kept rather than re-read because these records cannot be found in a tail: a
+/// cron is written when it is asked for and never again, so an hour later it
+/// sits behind a megabyte of everything since. The first tick reads the whole
+/// transcript, every tick after it reads only what was appended.
+#[derive(Default)]
+struct Arranged {
+    /// How far into the transcript this has read.
+    offset: u64,
+    /// Live crons, by id, each with the schedule in Claude Code's words.
+    crons: BTreeMap<String, String>,
+    /// When a scheduled task last woke the session.
+    last_fire: Option<SystemTime>,
+}
+
+/// Fold whatever has been appended to `path` into `at`.
+///
+/// Reads a line at a time and keeps only the few that could carry a record, so
+/// a first pass over a 26 MB transcript costs one sequential read and a
+/// kilobyte of memory rather than a 26 MB allocation.
+fn read_arranged(path: &Path, at: &mut Arranged) {
+    use std::io::{BufRead, BufReader, Seek, SeekFrom};
+    let Ok(file) = std::fs::File::open(path) else { return };
+    let Ok(len) = file.metadata().map(|m| m.len()) else { return };
+    // Shorter than last time means a different file under the same name.
+    // Reading on from the old offset would land mid-record.
+    if len < at.offset {
+        *at = Arranged::default();
+    }
+    if len == at.offset {
+        return;
+    }
+    let mut reader = BufReader::new(file);
+    if reader.seek(SeekFrom::Start(at.offset)).is_err() {
+        return;
+    }
+    let (mut wanted, mut line) = (String::new(), String::new());
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            // A line with no newline yet is still being written. Leave it
+            // where it is; the next tick will read it whole.
+            Ok(0) => break,
+            Ok(_) if !line.ends_with('\n') => break,
+            Ok(n) => {
+                at.offset += n as u64;
+                // Keys only these records carry. "Cron" alone was not
+                // enough: a CronDelete result never mentions it.
+                if line.contains("CronDelete")
+                    || line.contains("humanSchedule")
+                    || line.contains("scheduled_task_fire")
+                {
+                    wanted.push_str(&line);
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    let found = claude_state::scan_unattended(&wanted);
+    // Ids are unique per creation, so applying the creations and the deletions
+    // of one slice in either order gives the same answer.
+    at.crons.extend(found.created);
+    for id in found.deleted {
+        at.crons.remove(&id);
+    }
+    at.last_fire = found.last_fire.or(at.last_fire);
 }
 
 /// Attach what each session is doing: busy, looping, running a background
@@ -181,7 +249,7 @@ fn unattended(transcript: &Path) -> (Option<SystemTime>, Option<SystemTime>) {
 fn attach_state(
     sessions: &mut [sessions::ClaudeSession],
     parents: &HashMap<i32, i32>,
-    scheduled: &mut HashMap<String, SystemTime>,
+    arranged: &mut HashMap<String, Arranged>,
 ) {
     if sessions.is_empty() {
         return;
@@ -233,18 +301,14 @@ fn attach_state(
             // session actively writing to its transcript is exactly the one
             // that never pays for it.
             if rec.status != Some(claude_state::Status::Busy) {
-                let (wake, fired) = unattended(&transcript);
-                s.facts.wake_at = wake;
-                // Remembered rather than re-read each tick. The fire record is
-                // written at the *start* of a turn, so a long one pushes it out
-                // of the tail and the session would go back to reading "idle",
-                // which is the one thing a session that wakes on a schedule is
-                // not.
-                if let Some(t) = fired {
-                    scheduled.insert(rec.session_id.clone(), t);
-                }
+                s.facts.wake_at = pending_wake(&transcript);
             }
-            s.facts.last_scheduled_fire = scheduled.get(&rec.session_id).copied();
+            // Unlike the wakeup, this runs whether or not the session is
+            // working: a cron outlives the turn that made it.
+            let at = arranged.entry(rec.session_id.clone()).or_default();
+            read_arranged(&transcript, at);
+            s.facts.crons = at.crons.values().cloned().collect();
+            s.facts.last_scheduled_fire = at.last_fire;
         }
         s.record = Some(rec.clone());
     }
@@ -369,9 +433,9 @@ fn scan_ports() -> Option<Vec<PortRow>> {
 
 pub fn run(tx: Sender<Snapshot>) {
     let mut last_good: Vec<PortRow> = Vec::new();
-    // Sessions seen taking a scheduled task, by session id. See `attach_state`
-    // for why this is remembered rather than read fresh every tick.
-    let mut scheduled: HashMap<String, SystemTime> = HashMap::new();
+    // What each session has arranged to run without anyone watching, by
+    // session id. See `Arranged` for why this is kept rather than re-read.
+    let mut arranged: HashMap<String, Arranged> = HashMap::new();
     loop {
         // Ports and sessions are independent sources: sessions come from a
         // full pid walk that never consults lsof. Scanning them separately is
@@ -382,7 +446,7 @@ pub fn run(tx: Sender<Snapshot>) {
         // the terminal, the state lookup walks them down to the shells.
         let parents = crate::host::parent_map();
         attach_titles(&mut sessions, &parents);
-        attach_state(&mut sessions, &parents, &mut scheduled);
+        attach_state(&mut sessions, &parents, &mut arranged);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
@@ -585,7 +649,7 @@ mod live {
                     let text = std::fs::read_to_string(&path).unwrap_or_default();
                     let hits = text.matches("scheduled_task_fire").count();
                     mentioned += hits;
-                    if super::claude_state::last_scheduled_fire(&text).is_some() {
+                    if super::claude_state::scan_unattended(&text).last_fire.is_some() {
                         fired += 1;
                     }
                 }

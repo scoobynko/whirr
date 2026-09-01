@@ -71,10 +71,11 @@ pub enum Activity {
     /// Quiet, but it has armed its own wakeup: it will start again with
     /// nobody at the keyboard.
     Loop { wakes_in: Duration },
-    /// Quiet, but it takes scheduled work: a cron or a `/schedule` has woken
-    /// it before and can wake it again. Sibling of `Loop` without the
-    /// countdown, because nothing on disk says when the next one lands.
-    Scheduled { last_fire: Duration },
+    /// Quiet, but a schedule can start it: a live cron, or a scheduled task
+    /// that has woken it before. Sibling of `Loop` without the countdown,
+    /// because the schedule itself lives on the server and the next fire time
+    /// appears nowhere on disk.
+    Scheduled { last_fire: Option<Duration> },
     /// Quiet, but a shell it started is still running.
     BgJob,
     /// Waiting for a human. `since` is how long, when that is knowable.
@@ -109,6 +110,10 @@ pub struct ActivityFacts {
     pub last_write: Option<SystemTime>,
     /// When a scheduled task last woke this session, if one ever has.
     pub last_scheduled_fire: Option<SystemTime>,
+    /// Live crons, in Claude Code's own words: "Every 5 minutes". A cron
+    /// outlives the turn that made it, so this is the signal that matters —
+    /// a fire only proves one already happened.
+    pub crons: Vec<String>,
 }
 
 /// What the facts add up to. Derived on demand and never stored: every field
@@ -152,12 +157,12 @@ pub fn state(f: &ActivityFacts, now: SystemTime) -> SessionState {
         Activity::Loop { wakes_in: w }
     } else if !f.shells.is_empty() {
         Activity::BgJob
-    } else if let Some(d) = since(f.last_scheduled_fire) {
+    } else if !f.crons.is_empty() || f.last_scheduled_fire.is_some() {
         // Below a background job, which is happening now, and above idle,
         // which is what this would otherwise read as: a session that takes
         // scheduled work spends tokens with nobody watching, and saying
         // "idle" about it is the one answer that helps least.
-        Activity::Scheduled { last_fire: d }
+        Activity::Scheduled { last_fire: since(f.last_scheduled_fire) }
     } else if f.status == Some(Status::Idle) {
         Activity::Idle { since: status_age }
     } else {
@@ -343,30 +348,70 @@ pub fn armed_wake_at(tail: &str, grew_until: SystemTime) -> Option<SystemTime> {
     Some(at + Duration::from_secs(delay))
 }
 
-/// When a scheduled task last woke this session, read out of the tail.
+/// What one slice of a transcript says about work arranged to happen without
+/// the user: crons made and unmade, and scheduled tasks that fired.
 ///
-/// `/schedule` and a cron `/loop` both land here: Claude Code writes a
-/// `scheduled_task_fire` record into the session's own transcript when one
-/// fires, so the work happens on this machine and can be seen. What is not
-/// written anywhere is the schedule itself, so there is no next-fire time to
-/// count down to and none is invented.
+/// Deliberately incremental. These records are written when the user asks for
+/// them and then never again, so they end up arbitrarily far back — a cron set
+/// two hours ago sits behind a megabyte of since. A tail scan cannot see it,
+/// which is exactly how this was found.
+#[derive(Debug, Default, PartialEq)]
+pub struct Unattended {
+    /// Cron ids created here, each with the schedule in Claude Code's words.
+    pub created: Vec<(String, String)>,
+    /// Cron ids deleted here.
+    pub deleted: Vec<String>,
+    /// The latest scheduled fire in this slice.
+    pub last_fire: Option<SystemTime>,
+}
+
+/// Read cron and scheduled-fire records out of `text`.
 ///
-/// The record is matched by parsing, not by looking for the name in the line.
-/// A transcript quotes itself constantly — a grep for this very string finds
-/// tool output discussing it — and a substring match reads those as fires.
-pub fn last_scheduled_fire(tail: &str) -> Option<SystemTime> {
-    tail.lines()
-        .rev()
-        .filter(|l| l.contains("scheduled_task_fire"))
-        .find_map(|line| {
-            let v: serde_json::Value = serde_json::from_str(line).ok()?;
-            if v.get("type")?.as_str()? != "system"
-                || v.get("subtype")?.as_str()? != "scheduled_task_fire"
-            {
-                return None;
+/// Each of the three is identified by something in the record itself rather
+/// than by pairing a call with its result. Pairing needed the call and the
+/// result to survive the same pre-filter, and a `CronDelete` result does not
+/// mention the word "Cron" anywhere: every deletion was silently dropped and
+/// deleted crons stayed on the card. Keys that only cron records carry are a
+/// harder thing to get wrong.
+///
+/// `humanSchedule` is the key for a creation, since that is the only place the
+/// new id is written. A deletion names its id in the call itself, so it needs
+/// no result at all.
+pub fn scan_unattended(text: &str) -> Unattended {
+    let mut out = Unattended::default();
+    for line in text.lines() {
+        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else { continue };
+        if v.get("subtype").and_then(|s| s.as_str()) == Some("scheduled_task_fire")
+            && v.get("type").and_then(|t| t.as_str()) == Some("system")
+        {
+            if let Some(t) = v.get("timestamp").and_then(|t| t.as_str()).and_then(epoch_secs) {
+                out.last_fire = Some(UNIX_EPOCH + Duration::from_secs(t));
             }
-            Some(UNIX_EPOCH + Duration::from_secs(epoch_secs(v.get("timestamp")?.as_str()?)?))
-        })
+        }
+        if let Some(result) = v.get("toolUseResult") {
+            if let (Some(id), Some(schedule)) = (
+                result.get("id").and_then(|i| i.as_str()),
+                result.get("humanSchedule").and_then(|h| h.as_str()),
+            ) {
+                out.created.push((id.to_string(), schedule.to_string()));
+            }
+        }
+        if v.get("type").and_then(|t| t.as_str()) != Some("assistant") {
+            continue;
+        }
+        let blocks = v.get("message").and_then(|m| m.get("content")).and_then(|c| c.as_array());
+        for c in blocks.into_iter().flatten() {
+            if c.get("type").and_then(|t| t.as_str()) != Some("tool_use")
+                || c.get("name").and_then(|n| n.as_str()) != Some("CronDelete")
+            {
+                continue;
+            }
+            if let Some(id) = c.get("input").and_then(|i| i.get("id")).and_then(|i| i.as_str()) {
+                out.deleted.push(id.to_string());
+            }
+        }
+    }
+    out
 }
 
 /// One transcript line, as `(logged at, delay in seconds)`. A `None` delay is
@@ -711,10 +756,80 @@ mod tests {
         .replace('\n', "")
     }
 
+    /// The assistant turn that asks for a cron, and the user turn carrying the
+    /// result. Only the result knows the new id.
+    fn cron_create(call_id: &str, cron_id: &str, schedule: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{T}","message":{{"content":[
+               {{"type":"tool_use","id":"{call_id}","name":"CronCreate",
+                 "input":{{"cron":"*/5 * * * *","prompt":"check it","recurring":true}}}}]}}}}
+               |{{"type":"user","toolUseResult":{{"id":"{cron_id}",
+                 "humanSchedule":"{schedule}","recurring":true,"durable":false}},
+                 "message":{{"content":[{{"type":"tool_result","tool_use_id":"{call_id}"}}]}}}}"#
+        )
+        .replace('\n', "")
+        .replace("               ", "")
+        .replace('|', "\n")
+    }
+
+    /// A deletion, call only. Its result says nothing but the id.
+    fn cron_delete(cron_id: &str) -> String {
+        format!(
+            r#"{{"type":"assistant","timestamp":"{T}","message":{{"content":[
+               {{"type":"tool_use","id":"toolu_del","name":"CronDelete",
+                 "input":{{"id":"{cron_id}"}}}}]}}}}"#
+        )
+        .replace('\n', "")
+        .replace("               ", "")
+    }
+
+    #[test]
+    fn a_cron_is_found_with_the_schedule_in_claude_codes_own_words() {
+        let u = scan_unattended(&cron_create("toolu_a", "97709169", "Every 5 minutes"));
+        assert_eq!(u.created, vec![("97709169".into(), "Every 5 minutes".into())]);
+        assert!(u.deleted.is_empty());
+    }
+
+    #[test]
+    fn a_deletion_is_found_from_the_call_alone() {
+        // This is the bug that shipped: deletions were paired with their
+        // result, and a CronDelete result does not contain the word "Cron"
+        // anywhere, so it never survived the pre-filter and every deleted cron
+        // stayed on the card. The call names the id; no result is needed.
+        let u = scan_unattended(&cron_delete("97709169"));
+        assert_eq!(u.deleted, vec!["97709169".to_string()]);
+    }
+
+    #[test]
+    fn a_cron_made_then_unmade_then_made_again_leaves_one() {
+        // Exactly the shape found on a real machine.
+        let text = format!(
+            "{}\n{}\n{}",
+            cron_create("toolu_a", "97709169", "Every 5 minutes"),
+            cron_delete("97709169"),
+            cron_create("toolu_b", "190ef941", "Every 5 minutes"),
+        );
+        let u = scan_unattended(&text);
+        let mut live: Vec<String> = u.created.iter().map(|(id, _)| id.clone()).collect();
+        live.retain(|id| !u.deleted.contains(id));
+        assert_eq!(live, vec!["190ef941".to_string()]);
+    }
+
+    #[test]
+    fn talking_about_crons_does_not_create_one() {
+        let quoting = format!(
+            r#"{{"type":"user","message":{{"content":"run CronDelete and CronCreate, humanSchedule"}}}}
+               {{"type":"assistant","timestamp":"{T}","message":{{"content":[
+                 {{"type":"text","text":"CronDelete takes an id"}}]}}}}"#
+        );
+        let u = scan_unattended(&quoting);
+        assert_eq!(u, Unattended::default());
+    }
+
     #[test]
     fn a_scheduled_fire_is_found_and_the_latest_one_wins() {
         let tail = format!("{}\n{}\n", fire_line("2026-09-01T08:00:00.000Z"), fire_line(T));
-        assert_eq!(last_scheduled_fire(&tail), Some(at(T_SECS)));
+        assert_eq!(scan_unattended(&tail).last_fire, Some(at(T_SECS)));
     }
 
     #[test]
@@ -730,7 +845,7 @@ mod tests {
             "not json at all, but it mentions scheduled_task_fire".to_string(),
         ];
         for line in quoting {
-            assert_eq!(last_scheduled_fire(&line), None, "read as a fire: {line}");
+            assert_eq!(scan_unattended(&line).last_fire, None, "read as a fire: {line}");
         }
     }
 
@@ -740,7 +855,7 @@ mod tests {
         // watching, and "idle" is the one answer that helps least.
         let f = ActivityFacts { last_scheduled_fire: Some(ago(3600)), ..facts() };
         let st = derived(&f);
-        assert_eq!(st.activity, Activity::Scheduled { last_fire: Duration::from_secs(3600) });
+        assert_eq!(st.activity, Activity::Scheduled { last_fire: Some(Duration::from_secs(3600)) });
         assert!(st.warn, "it will wake without you");
     }
 
