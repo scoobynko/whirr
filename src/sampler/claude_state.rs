@@ -42,10 +42,20 @@ const STALLED: Duration = Duration::from_secs(15 * 60);
 /// itself, but it is holding its MCP servers and language servers open.
 const FORGOTTEN: Duration = Duration::from_secs(24 * 60 * 60);
 
-/// A subagent transcript touched this recently is one still being written to.
-/// Subagents write continuously while they run and never again once they
-/// finish, so file mtime answers "is one out right now" without a read.
-pub const SUBAGENT_HOT: Duration = Duration::from_secs(60);
+/// A subagent transcript touched this recently counts as one still running.
+///
+/// A heuristic, and the honest name for it. Three signals were tried and none
+/// of them is exact: an async dispatch is acknowledged the instant it is
+/// launched, so an outstanding call means "started", not "running"; the
+/// completion notice is not written in a shape that always parses; and an
+/// agent that is thinking writes nothing at all — measured here, 106 seconds
+/// of legitimate silence from an agent that was working the whole time.
+///
+/// So mtime it is, with a window sized to that measurement rather than
+/// guessed. The cost is the other direction: an agent that has finished stays
+/// on the count until its log goes cold. Better a number that lags than one
+/// that drops a session's work while it is still being done.
+pub const SUBAGENT_HOT: Duration = Duration::from_secs(5 * 60);
 
 /// How far past an armed wakeup's own timestamp the transcript may have grown
 /// before the wakeup is treated as spent rather than pending.

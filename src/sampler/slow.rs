@@ -258,26 +258,15 @@ fn read_arranged(path: &Path, at: &mut Arranged) -> Vec<String> {
     found.deleted
 }
 
-/// Attach what each session is doing: busy, looping, running a background
-/// shell, or waiting for you.
+/// Claude Code's own record of every session it is running, by pid.
 ///
-/// A session whose state cannot be read keeps `Unknown` and stays on the card.
-/// Losing a row because its config root moved would be a worse failure than
-/// showing it without a state — the row is still a session you can jump to.
-fn attach_state(
-    sessions: &mut [sessions::ClaudeSession],
-    parents: &HashMap<i32, i32>,
-    ledger: &mut Ledger,
-) {
-    if sessions.is_empty() {
-        return;
-    }
-    let roots = std::env::var_os("HOME")
-        .map(|h| config_roots(Path::new(&h)))
-        .unwrap_or_default();
-    // Every root's session files, read once per tick: a few hundred bytes
-    // each, one per session that is running.
-    let records: HashMap<i32, claude_state::SessionRecord> = roots
+/// Read once per tick: a few hundred bytes each, one per session. It both
+/// identifies sessions and describes them, because the process alone cannot
+/// always do either.
+fn read_records() -> HashMap<i32, claude_state::SessionRecord> {
+    let roots =
+        std::env::var_os("HOME").map(|h| config_roots(Path::new(&h))).unwrap_or_default();
+    roots
         .iter()
         .flat_map(|root| {
             std::fs::read_dir(root.join("sessions"))
@@ -291,7 +280,33 @@ fn attach_state(
                 })
         })
         .map(|r| (r.pid, r))
-        .collect();
+        .collect()
+}
+
+/// Attach what each session is doing: busy, looping, running a background
+/// shell, or waiting for you.
+///
+/// A session whose state cannot be read keeps `Unknown` and stays on the card.
+/// Losing a row because its config root moved would be a worse failure than
+/// showing it without a state — the row is still a session you can jump to.
+fn attach_state(
+    sessions: &mut [sessions::ClaudeSession],
+    parents: &HashMap<i32, i32>,
+    records: &HashMap<i32, claude_state::SessionRecord>,
+    ledger: &mut Ledger,
+) {
+    // Every session Claude Code has a record for feeds the cron ledger, not
+    // just the ones on the card. A cron is deleted from whichever window is in
+    // front, and that can be a background session the card does not list —
+    // which is how a deleted cron survived: once the row stopped being shown,
+    // its deletions stopped being read along with it.
+    for rec in records.values() {
+        if let Some(transcript) = transcript_of(rec) {
+            let at = ledger.by_session.entry(rec.session_id.clone()).or_default();
+            let deleted = read_arranged(&transcript, at);
+            ledger.deleted.extend(deleted);
+        }
+    }
     let now = SystemTime::now();
     for s in sessions.iter_mut() {
         // One argv read per shell, and only for sessions that have one: the
@@ -321,13 +336,11 @@ fn attach_state(
             if rec.status != Some(claude_state::Status::Busy) {
                 s.facts.wake_at = pending_wake(&transcript);
             }
-            // Unlike the wakeup, this runs whether or not the session is
-            // working: a cron outlives the turn that made it.
-            let at = ledger.by_session.entry(rec.session_id.clone()).or_default();
-            let deleted = read_arranged(&transcript, at);
-            s.facts.last_scheduled_fire = at.last_fire;
-            ledger.deleted.extend(deleted);
         }
+        // Folded above, for every known session rather than only the listed
+        // ones.
+        s.facts.last_scheduled_fire =
+            ledger.by_session.get(&rec.session_id).and_then(|a| a.last_fire);
         s.record = Some(rec.clone());
     }
     // Only now, with every session read, is it known which crons are still
@@ -340,24 +353,41 @@ fn attach_state(
     }
 }
 
-fn scan_sessions() -> Vec<sessions::ClaudeSession> {
+fn scan_sessions(
+    parents: &HashMap<i32, i32>,
+    records: &HashMap<i32, claude_state::SessionRecord>,
+) -> Vec<sessions::ClaudeSession> {
     let facts: Vec<sessions::SessionFacts> = crate::mac::proc::list_all_pids()
         .into_iter()
         .filter_map(|pid| {
-            let exec_path = crate::mac::proc::exec_path(pid)?;
-            if !exec_path.to_str().is_some_and(ports::is_claude) {
+            let exec_path = crate::mac::proc::exec_path(pid);
+            // Claude Code's own record settles it when the path cannot. The
+            // updater prunes old version directories out from under sessions
+            // that are still running, and `proc_pidpath` then answers nothing
+            // at all — measured here, that quietly lost the two oldest
+            // sessions on the machine, a month old on 2.1.220 and 2.1.221,
+            // which are exactly the ones a card about forgotten sessions
+            // exists to show. The process name is no help either: it is the
+            // version directory's own name, `2.1.220`.
+            let is_claude = exec_path
+                .as_deref()
+                .and_then(|p| p.to_str())
+                .is_some_and(ports::is_claude)
+                || records.contains_key(&pid);
+            if !is_claude {
                 return None;
             }
             // Only matched pids pay for the extra two calls.
             Some(sessions::SessionFacts {
                 pid,
-                exec_path: Some(exec_path),
+                is_claude,
+                exec_path,
                 cwd: crate::mac::proc::cwd(pid),
                 tty: crate::mac::proc::tty(pid).flatten(),
             })
         })
         .collect();
-    sessions::build_sessions(&facts)
+    sessions::build_sessions(&facts, parents)
 }
 
 pub fn parse_lsof(output: &str) -> Vec<PortInfo> {
@@ -467,12 +497,14 @@ pub fn run(tx: Sender<Snapshot>) {
         // full pid walk that never consults lsof. Scanning them separately is
         // what keeps an lsof failure — or a machine with no listening sockets
         // at all — from blanking the sessions card.
-        let mut sessions = scan_sessions();
-        // One `ps` shared by both passes: the host lookup walks parents up to
+        // One `ps` shared by all three passes: the scan walks parents up
+        // looking for another Claude Code, the host lookup walks them up to
         // the terminal, the state lookup walks them down to the shells.
         let parents = crate::host::parent_map();
+        let records = read_records();
+        let mut sessions = scan_sessions(&parents, &records);
         attach_titles(&mut sessions, &parents);
-        attach_state(&mut sessions, &parents, &mut ledger);
+        attach_state(&mut sessions, &parents, &records, &mut ledger);
         let (rows, stale) = match scan_ports() {
             Some(rows) => {
                 last_good = rows;
@@ -678,9 +710,10 @@ mod live {
     #[test]
     #[ignore]
     fn show_this_machines_sessions() {
-        let mut sessions = super::scan_sessions();
         let parents = crate::host::parent_map();
-        super::attach_state(&mut sessions, &parents, &mut Default::default());
+        let records = super::read_records();
+        let mut sessions = super::scan_sessions(&parents, &records);
+        super::attach_state(&mut sessions, &parents, &records, &mut Default::default());
         let now = std::time::SystemTime::now();
         for s in &sessions {
             let st = super::claude_state::state(&s.facts, now);
