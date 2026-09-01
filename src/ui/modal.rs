@@ -39,6 +39,10 @@ pub fn centred(area: Rect, w: u16, h: u16) -> Rect {
 ///
 /// `accent` colours the border and title: the caller decides how alarming the
 /// dialog looks, because "confirm a kill" and "pick a port" should not.
+///
+/// `align` is the box's *contents*, not the box: a question centres, and
+/// anything with a label gutter has to be left-aligned or the gutter zigzags
+/// down the dialog as each line is centred on its own width.
 pub fn render(
     f: &mut Frame,
     area: Rect,
@@ -46,6 +50,7 @@ pub fn render(
     title: &str,
     lines: Vec<Line>,
     accent: Color,
+    align: Alignment,
 ) {
     let widest = lines.iter().map(|l| l.width()).max().unwrap_or(0);
     // The title sits in the top border, so a long title widens the box too.
@@ -65,8 +70,17 @@ pub fn render(
     let inner = block.inner(rect);
     f.render_widget(block, rect);
 
-    let body = Rect { y: inner.y + 1, height: inner.height.saturating_sub(1), ..inner };
-    f.render_widget(Paragraph::new(lines).alignment(Alignment::Center), body);
+    // The two columns of padding `CHROME_COLS` budgets for. Centred content
+    // never touched the border so this went unnoticed; left-aligned content
+    // sits right against it without the inset.
+    const PAD: u16 = 2;
+    let body = Rect {
+        x: inner.x + PAD,
+        width: inner.width.saturating_sub(PAD * 2),
+        y: inner.y + 1,
+        height: inner.height.saturating_sub(1),
+    };
+    f.render_widget(Paragraph::new(lines).alignment(align), body);
 }
 
 #[cfg(test)]

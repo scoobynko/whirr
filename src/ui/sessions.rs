@@ -45,7 +45,9 @@ pub fn label(st: &SessionState) -> String {
     match &st.activity {
         // Subagents only ever run inside a turn, so they qualify "busy"
         // rather than standing as a state of their own.
-        Activity::Busy if st.subagents > 0 => format!("busy \u{00d7}{}", st.subagents),
+        Activity::Busy if !st.subagents.is_empty() => {
+            format!("busy \u{00d7}{}", st.subagents.len())
+        }
         Activity::Busy => "busy".into(),
         Activity::Loop { wakes_in } => format!("loop {}", brief(*wakes_in)),
         Activity::BgJob => "bg job".into(),
@@ -271,8 +273,9 @@ mod tests {
                 jumpable: false,
                 tty: Some("ttys001".into()),
                 state: SessionState::default(),
+                about: Default::default(),
             },
-            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()), state: SessionState::default() },
+            ClaudeSession { pid: 2, project: "other".into(), title: None, jumpable: false, tty: Some("ttys002".into()), state: SessionState::default(), about: Default::default() },
         ];
         let out = draw_app(&app, 40, 8).join("\n");
         assert!(!out.contains("ttys001"), "no collisions, so no tty column:\n{out}");
@@ -309,7 +312,9 @@ mod tests {
         assert_eq!(
             label(&SessionState {
                 activity: Activity::Loop { wakes_in: Duration::from_secs(260) },
-                subagents: 0,
+                subagents: Vec::new(),
+                shell: None,
+                writing_age: None,
                 warn: true
             }),
             "loop 4m"
@@ -317,7 +322,9 @@ mod tests {
         assert_eq!(
             label(&SessionState {
                 activity: Activity::Loop { wakes_in: Duration::from_secs(40) },
-                subagents: 0,
+                subagents: Vec::new(),
+                shell: None,
+                writing_age: None,
                 warn: true
             }),
             "loop 40s"
@@ -330,7 +337,9 @@ mod tests {
         // same number after a fortnight is the whole message.
         let fresh = SessionState {
             activity: Activity::Idle { since: Some(Duration::from_secs(90)) },
-            subagents: 0,
+            subagents: Vec::new(),
+            shell: None,
+            writing_age: None,
             warn: false,
         };
         assert_eq!(label(&fresh), "idle");

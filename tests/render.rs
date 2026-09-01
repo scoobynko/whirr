@@ -1009,3 +1009,32 @@ fn two_by_two_grid_falls_back_below_either_floor() {
         assert_eq!(row_of(&lines, "CPU"), 5, "{w}x{h} ({why}): compact header is 5 rows, so gauges start at row 5");
     }
 }
+
+#[test]
+fn the_footer_offers_details_on_the_sessions_card_only() {
+    // Unlike `o`, this needs nothing of the terminal host, so it is offered
+    // for every session row rather than only the reachable ones.
+    let c = draw_app_at(&demo_with_focus(Focus::Sessions), 120, 40);
+    assert!(c.contains("d details"), "sessions should offer it");
+    for focus in [Focus::Processes, Focus::Localhost, Focus::Others] {
+        let c = draw_app_at(&demo_with_focus(focus), 120, 40);
+        assert!(!c.contains("d details"), "{focus:?} has no session to describe");
+    }
+}
+
+#[test]
+fn the_details_dialog_draws_over_the_whole_frame() {
+    // Like the kill confirmation before it: raised from the sessions card but
+    // drawn over everything, not inside the panel it came from.
+    let mut app = App::demo();
+    app.focus = Focus::Sessions;
+    app.select(3);
+    app.on_key(KeyEvent::from(KeyCode::Char('d')));
+    let g = draw_grid_app(&app, 120, 40);
+    let joined = g.join("\n");
+    assert!(joined.contains("bg job"), "the state should be spelled out:\n{joined}");
+    assert!(joined.contains("CI=true pnpm test"), "the command is the point:\n{joined}");
+    // The dialog's own key legend replaces the global one while it is up.
+    assert!(joined.contains("esc close"), "footer should be the dialog's:\n{joined}");
+    assert!(!joined.contains("q quit"), "global keys are inert behind it:\n{joined}");
+}

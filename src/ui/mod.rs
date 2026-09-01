@@ -3,8 +3,9 @@ pub mod cpu;
 pub mod font;
 pub mod gauge;
 pub mod header;
+pub mod details;
 pub mod memory;
-pub mod modal;
+mod modal;
 pub mod network;
 pub mod ports;
 pub mod power;
@@ -73,11 +74,33 @@ pub fn draw(f: &mut Frame, app: &App) {
     // to appear inside the Processes box two panels away.
     if app.settings_open {
         render_settings(f, area, app);
+    } else if app.details_open {
+        render_session_details(f, area, app);
     } else if let Some((pid, name)) = &app.pending_kill {
         render_kill_dialog(f, area, &app.theme, *pid, name);
     } else if let Some(pick) = &app.pending_port_pick {
         render_port_picker(f, area, &app.theme, pick);
     }
+}
+
+/// The details dialog for the selected session.
+///
+/// Reads the session out of the live snapshot on every frame rather than
+/// copying it when the key was pressed, so a countdown keeps counting and a
+/// subagent that finishes disappears while the dialog is open.
+fn render_session_details(f: &mut Frame, area: Rect, app: &App) {
+    let Some(s) = app.sessions().get(app.selected()) else { return };
+    let lines = details::lines(
+        s,
+        &app.theme,
+        app.cpu_of(s.pid),
+        app.mem_of(s.pid),
+        std::time::SystemTime::now(),
+    );
+    let accent = if s.state.warn { app.theme.amber } else { app.theme.accent };
+    // Left, not centred: every line here has a label gutter, and centring
+    // each one on its own width makes that gutter zigzag.
+    modal::render(f, area, &app.theme, details::title(s), lines, accent, Alignment::Left);
 }
 
 /// The settings dialog: one row per choice, current value on the right.
@@ -133,7 +156,7 @@ fn render_settings(f: &mut Frame, area: Rect, app: &App) {
         })
         .collect();
 
-    modal::render(f, area, t, "settings", lines, t.accent);
+    modal::render(f, area, t, "settings", lines, t.accent, Alignment::Center);
 }
 
 /// "Which of this row's ports did you mean?" — asked only when the row offers
@@ -158,7 +181,7 @@ fn render_port_picker(f: &mut Frame, area: Rect, theme: &theme::Theme, pick: &cr
         Span::styled("n", Style::default().fg(theme.text).bold()),
         Span::styled(" cancel", Style::default().fg(theme.dim)),
     ]));
-    modal::render(f, area, theme, "open which port?", lines, theme.accent);
+    modal::render(f, area, theme, "open which port?", lines, theme.accent, Alignment::Center);
 }
 
 /// "You are about to send SIGTERM to this" — the one irreversible thing whirr
@@ -177,7 +200,7 @@ fn render_kill_dialog(f: &mut Frame, area: Rect, theme: &theme::Theme, pid: i32,
             Span::styled(" cancel", Style::default().fg(theme.text)),
         ]),
     ];
-    modal::render(f, area, theme, "confirm kill", lines, theme.red);
+    modal::render(f, area, theme, "confirm kill", lines, theme.red, Alignment::Center);
 }
 
 /// One column of gutter either side of everything.
@@ -313,6 +336,14 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         f.render_widget(Paragraph::new(text), area);
         return;
     }
+    if app.details_open {
+        let text = Line::from(vec![
+            Span::styled("esc", Style::default().fg(app.theme.text).bold()),
+            Span::styled(" close", Style::default().fg(app.theme.dim)),
+        ]);
+        f.render_widget(Paragraph::new(text), area);
+        return;
+    }
     if app.settings_open {
         let text = Line::from(vec![
             Span::styled("↑↓", Style::default().fg(app.theme.accent).bold()),
@@ -350,9 +381,13 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         Focus::Sessions => app.selected_session_is_jumpable(),
         _ => false,
     };
-    let items: [Option<&str>; 7] = [
+    // Unlike `o`, this needs nothing of the host: any session row can be
+    // asked what it is doing.
+    let show_details = matches!(app.focus, Focus::Sessions) && !app.sessions().is_empty();
+    let items: [Option<&str>; 8] = [
         Some("↑↓ select"),
         show_sort.then_some("c/m sort"),
+        show_details.then_some("d details"),
         show_open.then_some("o open"),
         show_kill.then_some("k kill"),
         Some("s settings"),
@@ -368,7 +403,8 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     // Dropped first to last: settings (discoverable elsewhere), select (the
     // arrow keys are a safe guess), sort, then the card-specific actions.
     // "tab focus" and "q quit" are never dropped.
-    const DROP_ORDER: [&str; 5] = ["s settings", "↑↓ select", "c/m sort", "o open", "k kill"];
+    const DROP_ORDER: [&str; 6] =
+        ["s settings", "↑↓ select", "c/m sort", "o open", "d details", "k kill"];
     let mut shown: Vec<&str> = items.into_iter().flatten().collect();
     for victim in DROP_ORDER {
         let width: usize =

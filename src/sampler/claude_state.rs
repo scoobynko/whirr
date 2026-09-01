@@ -84,8 +84,10 @@ pub struct ActivityFacts {
     pub status_age: Option<Duration>,
     /// Live shell children of the session process.
     pub shells: usize,
-    /// Subagent transcripts being written to right now.
-    pub subagents: usize,
+    /// What the first of them is running, once the wrapper is stripped off.
+    pub shell: Option<String>,
+    /// The subagents running right now.
+    pub subagents: Vec<Subagent>,
     /// Time until an armed wakeup fires, when one is armed.
     pub wakes_in: Option<Duration>,
     /// How long since anything was written to the session's transcript. This
@@ -97,7 +99,12 @@ pub struct ActivityFacts {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SessionState {
     pub activity: Activity,
-    pub subagents: usize,
+    pub subagents: Vec<Subagent>,
+    /// The background command a shell child is running, when there is one.
+    pub shell: Option<String>,
+    /// How long since the session last wrote to its transcript. The card has
+    /// no room for it; the dialog is where "busy but silent" becomes visible.
+    pub writing_age: Option<Duration>,
     /// Something here is running without you: a loop, an orphaned shell, a
     /// turn that never finished, or a session left open for days.
     pub warn: bool,
@@ -105,7 +112,13 @@ pub struct SessionState {
 
 impl Default for SessionState {
     fn default() -> Self {
-        SessionState { activity: Activity::Unknown, subagents: 0, warn: false }
+        SessionState {
+            activity: Activity::Unknown,
+            subagents: Vec::new(),
+            shell: None,
+            writing_age: None,
+            warn: false,
+        }
     }
 }
 
@@ -140,7 +153,13 @@ pub fn state(f: &ActivityFacts) -> SessionState {
         Activity::Idle { since } => since.is_some_and(|d| d >= FORGOTTEN),
         Activity::Unknown => false,
     };
-    SessionState { activity, subagents: f.subagents, warn }
+    SessionState {
+        activity,
+        subagents: f.subagents.clone(),
+        shell: f.shell.clone(),
+        writing_age: f.writing_age,
+        warn,
+    }
 }
 
 /// One running session as `sessions/<pid>.json` describes it.
@@ -151,6 +170,9 @@ pub struct SessionRecord {
     pub cwd: PathBuf,
     pub status: Option<Status>,
     pub status_updated_at: Option<SystemTime>,
+    /// The Claude Code build, and when the process started.
+    pub version: Option<String>,
+    pub started_at: Option<SystemTime>,
     /// The config root this record was found under, so the transcript can be
     /// looked up in the same tree.
     pub root: PathBuf,
@@ -172,6 +194,11 @@ pub fn parse_session_record(json: &str, root: &Path) -> Option<SessionRecord> {
         status,
         status_updated_at: v
             .get("statusUpdatedAt")
+            .and_then(|t| t.as_u64())
+            .map(|ms| UNIX_EPOCH + Duration::from_millis(ms)),
+        version: v.get("version").and_then(|s| s.as_str()).map(str::to_string),
+        started_at: v
+            .get("startedAt")
             .and_then(|t| t.as_u64())
             .map(|ms| UNIX_EPOCH + Duration::from_millis(ms)),
         root: root.to_path_buf(),
@@ -231,25 +258,74 @@ pub fn transcript_of(rec: &SessionRecord) -> Option<PathBuf> {
         .find(|p| p.is_file())
 }
 
-/// How many of a session's subagents are being written to right now.
+/// One subagent a session has out right now.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Subagent {
+    /// `general-purpose`, `Explore`, or whatever the agent was dispatched as.
+    pub kind: String,
+    /// The model it was given, when the dispatch named one.
+    pub model: Option<String>,
+    /// The task it was handed. This is the line that answers "what is this
+    /// session actually doing" — the count alone never does.
+    pub task: String,
+}
+
+/// The subagents a session is running right now, newest first.
 ///
 /// `dir` is the `subagents` directory beside the transcript. A missing
-/// directory means the session has never spawned one, which is zero, not an
-/// error.
-pub fn hot_subagents(dir: &Path, now: SystemTime) -> usize {
-    std::fs::read_dir(dir)
+/// directory means the session has never spawned one, which is none of them,
+/// not an error.
+///
+/// Only the transcripts still being written to are read: a subagent writes
+/// continuously while it runs and never again once it finishes, so mtime
+/// separates the live ones from a session's whole history of them without
+/// opening a single file. The small `.meta.json` beside each live one is then
+/// worth reading; the transcript itself never is.
+pub fn hot_subagents(dir: &Path, now: SystemTime) -> Vec<Subagent> {
+    let mut live: Vec<(SystemTime, PathBuf)> = std::fs::read_dir(dir)
         .into_iter()
         .flatten()
         .flatten()
         .filter(|e| e.path().extension().is_some_and(|x| x == "jsonl"))
-        .filter(|e| {
-            e.metadata()
-                .and_then(|m| m.modified())
-                .ok()
-                .and_then(|m| now.duration_since(m).ok())
-                .is_some_and(|age| age <= SUBAGENT_HOT)
+        .filter_map(|e| {
+            let at = e.metadata().and_then(|m| m.modified()).ok()?;
+            (now.duration_since(at).ok()? <= SUBAGENT_HOT).then(|| (at, e.path()))
         })
-        .count()
+        .collect();
+    live.sort_by_key(|(at, _)| std::cmp::Reverse(*at));
+    live.iter().filter_map(|(_, p)| parse_subagent(&std::fs::read_to_string(p.with_extension("meta.json")).ok()?)).collect()
+}
+
+/// One `agent-<id>.meta.json`.
+pub fn parse_subagent(json: &str) -> Option<Subagent> {
+    let v: serde_json::Value = serde_json::from_str(json).ok()?;
+    Some(Subagent {
+        kind: v.get("agentType")?.as_str()?.to_string(),
+        model: v.get("model").and_then(|m| m.as_str()).map(str::to_string),
+        task: v.get("description").and_then(|d| d.as_str()).unwrap_or_default().to_string(),
+    })
+}
+
+/// The command a background shell is actually running, dug out of the wrapper
+/// Claude Code's Bash tool builds around it.
+///
+/// That wrapper is four fixed clauses — source the shell snapshot, set
+/// options, drop an alias, then `eval '<your command>' < /dev/null` — and
+/// showing it verbatim would fill the dialog with boilerplate and hide the one
+/// line worth reading. The closing marker is matched from the right because
+/// the suffix is appended last, so a command containing the same characters
+/// cannot cut the match short.
+///
+/// An argv that does not have this shape is handed back whole: an unrecognised
+/// wrapper is still better read than dropped.
+pub fn shell_command(argv: &str) -> &str {
+    const OPEN: &str = "&& eval '";
+    const CLOSE: &str = "' < /dev/null";
+    let Some(start) = argv.find(OPEN).map(|i| i + OPEN.len()) else { return argv.trim() };
+    match argv[start..].rfind(CLOSE) {
+        Some(end) => argv[start..start + end].trim(),
+        None => argv.trim(),
+    }
 }
 
 /// Seconds since the epoch for the one timestamp shape the transcript uses,
@@ -319,19 +395,30 @@ fn wakeup_in_line(line: &str) -> Option<(u64, Option<u64>)> {
     })
 }
 
-/// How many of `pid`'s children are shells.
+/// Which of `pid`'s children are shells.
 ///
 /// This is what a background `Bash` call looks like from outside: the tool
 /// runs `/bin/zsh -c …` as a child of the session and leaves it running. The
 /// session's other children are MCP servers and language servers, which are
 /// node, python or uv — never a shell — so the executable name alone
 /// separates them, without paying for an argv read per child.
-pub fn shell_children(pid: i32, parents: &HashMap<i32, i32>, exec: impl Fn(i32) -> Option<PathBuf>) -> usize {
-    parents
+///
+/// Pids rather than a count, so the caller can read one argv for the dialog
+/// without this function having to do IO of its own. Lowest pid first, which
+/// on a wrapping-free counter is oldest first.
+pub fn shell_children(
+    pid: i32,
+    parents: &HashMap<i32, i32>,
+    exec: impl Fn(i32) -> Option<PathBuf>,
+) -> Vec<i32> {
+    let mut pids: Vec<i32> = parents
         .iter()
         .filter(|(_, &ppid)| ppid == pid)
-        .filter(|(&child, _)| exec(child).as_deref().is_some_and(is_shell))
-        .count()
+        .map(|(&child, _)| child)
+        .filter(|&child| exec(child).as_deref().is_some_and(is_shell))
+        .collect();
+    pids.sort_unstable();
+    pids
 }
 
 fn is_shell(path: &Path) -> bool {
@@ -482,6 +569,7 @@ mod tests {
         assert_eq!(r.status, Some(Status::Busy));
         assert_eq!(r.status_updated_at, Some(UNIX_EPOCH + Duration::from_millis(1788253028183)));
         assert_eq!(r.root, PathBuf::from("/root"));
+        assert_eq!(r.version.as_deref(), Some("2.1.252"));
     }
 
     #[test]
@@ -619,14 +707,14 @@ mod tests {
                 _ => "/bin/bash",
             }))
         };
-        assert_eq!(shell_children(9, &parents, exec), 1);
-        assert_eq!(shell_children(7, &parents, exec), 1, "another session's shell");
-        assert_eq!(shell_children(999, &parents, exec), 0, "a pid with no children");
+        assert_eq!(shell_children(9, &parents, exec), vec![20]);
+        assert_eq!(shell_children(7, &parents, exec), vec![30], "another session's shell");
+        assert!(shell_children(999, &parents, exec).is_empty(), "a pid with no children");
     }
 
     #[test]
     fn an_unreadable_child_is_not_counted_as_a_shell() {
         let parents: HashMap<i32, i32> = [(20, 9)].into();
-        assert_eq!(shell_children(9, &parents, |_| None), 0);
+        assert!(shell_children(9, &parents, |_| None).is_empty());
     }
 }

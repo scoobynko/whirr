@@ -45,6 +45,7 @@ there would be nothing to show.
 | `tab` | move between cards |
 | `↑` `↓` | move inside one |
 | `c` `m` | sort processes by cpu, by memory |
+| `d` | what a Claude session is doing: subagents and their tasks, the background command, where it lives |
 | `o` | open a dev server in your browser, or jump to the terminal a Claude session runs in |
 | `k` | kill it. asks first |
 | `s` | settings: theme, accent, background, fan |
@@ -64,6 +65,10 @@ Amber marks the ones running without you. Claude Code publishes its own
 busy/idle flag, so none of this is guessed from CPU. Sessions from a second
 account are included — whirr reads every `~/.claude*` config root, not just
 the default one.
+
+`d` opens the rest: each subagent by type, model and the task it was given,
+the real command a background shell is running, the full project path, which
+account, and how long the session has been open.
 
 ## Performance
 

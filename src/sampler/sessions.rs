@@ -44,6 +44,25 @@ pub struct ClaudeSession {
     /// `slow.rs` from Claude Code's own state files; a session it cannot read
     /// keeps the `Unknown` default rather than being dropped from the card.
     pub state: SessionState,
+    /// The rest of the session's identity, for the details dialog. None of it
+    /// earns a column on the card, and all of it is the first thing you want
+    /// once a row has your attention.
+    pub about: About,
+}
+
+/// What the card knows about a session but has no room to say.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct About {
+    /// The full working directory, not the basename the card shows.
+    pub cwd: Option<PathBuf>,
+    /// Which config root this session belongs to — `.claude`, or the second
+    /// account's tree. Two sessions with the same project name can be two
+    /// different logins.
+    pub account: Option<String>,
+    /// The Claude Code build running it.
+    pub version: Option<String>,
+    /// When the process started, for "open 5h".
+    pub started_at: Option<std::time::SystemTime>,
 }
 
 /// Keep the Claude processes and turn them into rows, ordered by project, then
@@ -73,6 +92,7 @@ pub fn build_sessions(facts: &[SessionFacts]) -> Vec<ClaudeSession> {
             title: None,
             jumpable: false,
             state: SessionState::default(),
+            about: About::default(),
         })
         .collect();
     out.sort_by(|a, b| {

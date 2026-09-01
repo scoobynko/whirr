@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
@@ -6,8 +6,8 @@ use crate::history::History;
 use crate::mac::sysctl::SystemStatic;
 use crate::sampler::ports::{self, PortGroup, PortRow};
 use crate::settings::Settings;
-use crate::sampler::claude_state::{Activity, SessionState};
-use crate::sampler::sessions::ClaudeSession;
+use crate::sampler::claude_state::{Activity, SessionState, Subagent};
+use crate::sampler::sessions::{About, ClaudeSession};
 use crate::sampler::{
     BatterySnap, FastSnap, MemDetail, MediumSnap, PowerSnap, PressureLevel, ProcInfo, SlowSnap,
     Snapshot,
@@ -79,6 +79,10 @@ pub struct App {
     /// Always `settings.theme()` — see `apply_settings`.
     pub theme: crate::ui::theme::Theme,
     pub settings_open: bool,
+    /// The session details dialog. A flag, not a copy of the session: the
+    /// dialog reads the live snapshot every frame, so a countdown keeps
+    /// counting and a finished subagent leaves while you are looking at it.
+    pub details_open: bool,
     /// Set when a setting changes; the event loop drains it and writes the
     /// config. `App` does not touch the filesystem for the same reason it
     /// does not spawn `open`: tests press keys by the hundred, and none of
@@ -136,6 +140,7 @@ impl App {
             settings: Settings::default(),
             theme: Settings::default().theme(),
             settings_open: false,
+            details_open: false,
             settings_dirty: false,
             settings_row: 0,
             sort_by: SortBy::Cpu,
@@ -310,13 +315,32 @@ impl App {
             // every branch of the renderer rather than four idle rows.
             sessions: vec![
                 ClaudeSession { pid: 601, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys020".into()),
-                    state: SessionState { activity: Activity::Busy, subagents: 2, warn: false } },
+                    about: About { cwd: Some("/Users/me/Projects/axterio".into()), account: Some(".claude".into()), version: Some("2.1.252".into()), started_at: Some(SystemTime::now() - Duration::from_secs(18000)) },
+                    state: SessionState {
+                        activity: Activity::Busy,
+                        subagents: vec![
+                            Subagent { kind: "general-purpose".into(), model: Some("haiku".into()), task: "Run full quality checks".into() },
+                            Subagent { kind: "Explore".into(), model: Some("sonnet".into()), task: "Find every call site of useChart".into() },
+                        ],
+                        shell: None,
+                        writing_age: Some(Duration::from_secs(3)),
+                        warn: false,
+                    } },
                 ClaudeSession { pid: 602, project: "axterio".into(), title: None, jumpable: true, tty: Some("ttys021".into()),
-                    state: SessionState { activity: Activity::Loop { wakes_in: Duration::from_secs(260) }, subagents: 0, warn: true } },
+                    about: About { cwd: Some("/Users/me/Projects/axterio".into()), account: Some(".claude".into()), version: Some("2.1.252".into()), started_at: Some(SystemTime::now() - Duration::from_secs(7200)) },
+                    state: SessionState { activity: Activity::Loop { wakes_in: Duration::from_secs(260) }, subagents: Vec::new(), shell: None, writing_age: None, warn: true } },
                 ClaudeSession { pid: 603, project: "whirr".into(), title: Some("✳ Fix the port picker".into()), jumpable: true, tty: Some("ttys004".into()),
-                    state: SessionState { activity: Activity::Idle { since: Duration::from_secs(90).into() }, subagents: 0, warn: false } },
+                    about: About { cwd: Some("/Users/me/Projects/whirr".into()), account: Some(".claude".into()), version: Some("2.1.252".into()), started_at: Some(SystemTime::now() - Duration::from_secs(600)) },
+                    state: SessionState { activity: Activity::Idle { since: Duration::from_secs(90).into() }, subagents: Vec::new(), shell: None, writing_age: None, warn: false } },
                 ClaudeSession { pid: 604, project: "eye-claudius".into(), title: None, jumpable: false, tty: None,
-                    state: SessionState { activity: Activity::BgJob, subagents: 0, warn: true } },
+                    about: About { cwd: Some("/Users/me/Projects/eye-claudius".into()), account: Some(".claude-work".into()), version: Some("2.1.251".into()), started_at: Some(SystemTime::now() - Duration::from_secs(432000)) },
+                    state: SessionState {
+                        activity: Activity::BgJob,
+                        subagents: Vec::new(),
+                        shell: Some("CI=true pnpm test".into()),
+                        writing_age: None,
+                        warn: true,
+                    } },
             ],
             stale: false,
         }));
@@ -400,6 +424,11 @@ impl App {
         self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.cpu)
     }
 
+    /// Resident memory for a pid, joined out of the same snapshot as `cpu_of`.
+    pub fn mem_of(&self, pid: i32) -> Option<u64> {
+        self.fast.as_ref()?.processes.iter().find(|p| p.pid == pid).map(|p| p.mem)
+    }
+
     /// What a session is doing, for a row that knows only its pid.
     ///
     /// The grouped ports card carries Claude sessions too, at widths where
@@ -444,6 +473,15 @@ impl App {
         // Dialogs are checked before anything else and always return, so no
         // key can act on the dashboard behind one — and no second dialog can
         // stack on top of the first.
+        if self.details_open {
+            // Read-only, so anything that is not "close" is simply ignored
+            // rather than acted on behind the dialog.
+            if matches!(key.code, KeyCode::Esc | KeyCode::Char('d') | KeyCode::Char('q')) {
+                self.details_open = false;
+            }
+            return;
+        }
+
         if self.settings_open {
             match key.code {
                 KeyCode::Up => self.settings_row = self.settings_row.saturating_sub(1),
@@ -544,6 +582,11 @@ impl App {
             // whatever happened to sit at that offset.
             // The sessions card has no URL, but it does have somewhere to
             // go: the terminal the session is running in.
+            // Details are for sessions only: the other cards have nothing a
+            // dialog could say that their row does not already fit.
+            KeyCode::Char('d') if matches!(self.focus, Focus::Sessions) => {
+                self.details_open = self.selected() < self.sessions().len();
+            }
             KeyCode::Char('o') if matches!(self.focus, Focus::Sessions) => {
                 if let Some(s) = self.sessions().get(self.selected()).filter(|s| s.jumpable) {
                     self.focus_request = Some((s.pid, s.tty.clone()));
@@ -1229,4 +1272,55 @@ mod tests {
         a.focus = Focus::Processes;
         assert_eq!(a.selected(), 4, "clamping one panel must not disturb another");
     }
+
+    #[test]
+    fn d_opens_session_details_and_esc_closes_them() {
+        let mut a = App::demo();
+        a.focus = Focus::Sessions;
+        a.on_key(key('d'));
+        assert!(a.details_open, "d should open the dialog");
+        a.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(!a.details_open, "esc should close it");
+        a.on_key(key('d'));
+        a.on_key(key('d'));
+        assert!(!a.details_open, "d again should close it too");
+    }
+
+    #[test]
+    fn d_does_nothing_on_a_card_that_has_no_sessions() {
+        // The other cards have nothing a dialog could say that their own row
+        // does not already fit.
+        for focus in [Focus::Processes, Focus::Localhost, Focus::Others] {
+            let mut a = App::demo();
+            a.focus = focus;
+            a.on_key(key('d'));
+            assert!(!a.details_open, "{focus:?} should not open a session dialog");
+        }
+    }
+
+    #[test]
+    fn the_details_dialog_swallows_every_other_key() {
+        // It is read-only, so a stray `k` must not raise a kill behind it,
+        // and a Tab must not move focus under a dialog you are reading.
+        let mut a = App::demo();
+        a.focus = Focus::Sessions;
+        a.on_key(key('d'));
+        for k in [key('k'), key('s'), KeyEvent::from(KeyCode::Tab), KeyEvent::from(KeyCode::Down)] {
+            a.on_key(k);
+        }
+        assert!(a.details_open, "the dialog should still be up");
+        assert!(a.pending_kill.is_none(), "no kill should have been raised");
+        assert!(!a.settings_open, "no dialog should stack on it");
+        assert_eq!(a.focus, Focus::Sessions, "focus should not have moved");
+    }
+
+    #[test]
+    fn ctrl_c_quits_even_with_the_details_dialog_open() {
+        let mut a = App::demo();
+        a.focus = Focus::Sessions;
+        a.on_key(key('d'));
+        a.on_key(KeyEvent::new(KeyCode::Char('c'), KeyModifiers::CONTROL));
+        assert!(a.should_quit);
+    }
+
 }

@@ -102,11 +102,28 @@ fn attach_state(sessions: &mut [sessions::ClaudeSession], parents: &HashMap<i32,
         .collect();
     let now = SystemTime::now();
     for s in sessions.iter_mut() {
+        let shells =
+            claude_state::shell_children(s.pid, parents, crate::mac::proc::exec_path);
         let mut facts = claude_state::ActivityFacts {
-            shells: claude_state::shell_children(s.pid, parents, crate::mac::proc::exec_path),
+            shells: shells.len(),
+            // One argv read, for one shell, only when a session has one — the
+            // call copies a 256 KB argument area and has no business anywhere
+            // near a full-system walk.
+            shell: shells.first().and_then(|&p| crate::mac::proc::args(p)).map(|argv| {
+                claude_state::shell_command(&argv).to_string()
+            }),
             ..Default::default()
         };
         if let Some(rec) = records.get(&s.pid) {
+            s.about = sessions::About {
+                cwd: Some(rec.cwd.clone()),
+                account: rec
+                    .root
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned()),
+                version: rec.version.clone(),
+                started_at: rec.started_at,
+            };
             facts.status = rec.status;
             facts.status_age = rec
                 .status_updated_at
@@ -408,9 +425,11 @@ n*:7000
 
 #[cfg(test)]
 mod live {
-    /// Not an assertion about behaviour: a way to look at what this machine's
-    /// own sessions report, which no fixture can stand in for. Every state
-    /// here comes from files and processes that only exist at runtime.
+    /// What this machine's own sessions report, which no fixture can stand in
+    /// for: every state here comes from files and processes that only exist at
+    /// runtime. It also parses every subagent record the machine has ever
+    /// written, which is the only way to know the fixtures match what Claude
+    /// Code actually produces rather than what it produced once.
     ///
     /// `cargo test --lib live -- --ignored --nocapture`
     #[test]
@@ -421,15 +440,49 @@ mod live {
         super::attach_state(&mut sessions, &parents);
         for s in &sessions {
             println!(
-                "{:>6} {:<28} {:<9} {:?} subagents={} warn={}",
+                "{:>6} {:<28} {:<9} {:?} subagents={} shell={:?} warn={}",
                 s.pid,
                 s.project,
                 s.tty.as_deref().unwrap_or("-"),
                 s.state.activity,
-                s.state.subagents,
+                s.state.subagents.len(),
+                s.state.shell,
                 s.state.warn
             );
         }
         assert!(!sessions.is_empty(), "whirr's own session should be running this");
+        // And every real subagent record this machine has ever written, to
+        // prove the fixture matches what Claude Code actually produces.
+        let home = std::env::var("HOME").expect("HOME");
+        let mut seen = 0;
+        for root in super::claude_state::config_roots(std::path::Path::new(&home)) {
+            for meta in glob_meta(&root.join("projects")) {
+                let text = std::fs::read_to_string(&meta).expect("readable");
+                let parsed = super::claude_state::parse_subagent(&text);
+                assert!(parsed.is_some(), "unparsed subagent meta: {}", meta.display());
+                seen += 1;
+                if seen <= 3 {
+                    println!("subagent {:?}", parsed.unwrap());
+                }
+            }
+        }
+        println!("parsed {seen} real subagent records");
+    }
+
+    /// Every `*.meta.json` under a projects tree.
+    fn glob_meta(projects: &std::path::Path) -> Vec<std::path::PathBuf> {
+        let mut out = Vec::new();
+        for project in std::fs::read_dir(projects).into_iter().flatten().flatten() {
+            for session in std::fs::read_dir(project.path()).into_iter().flatten().flatten() {
+                let dir = session.path().join("subagents");
+                for f in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+                    let p = f.path();
+                    if p.to_string_lossy().ends_with(".meta.json") {
+                        out.push(p);
+                    }
+                }
+            }
+        }
+        out
     }
 }

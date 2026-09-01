@@ -361,7 +361,8 @@ mod tests {
                 title: None,
                 jumpable: false,
                 tty: Some("ttys020".into()),
-                state: SessionState { activity, subagents: 0, warn },
+                state: SessionState { activity, subagents: Vec::new(), shell: None, writing_age: None, warn },
+                about: Default::default(),
             }],
             stale: false,
         }));
